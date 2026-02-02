@@ -67,9 +67,21 @@ pub async fn search(
     
     let limit = params.limit.unwrap_or(10);
     
+    println!("🔍 Search request: q='{}' (empty={}) limit={}", params.q, params.q.trim().is_empty(), limit);
+
     // Optimize empty search to just return recent/top symbols
     let results = if params.q.trim().is_empty() {
-         store.get_recent_symbols(limit).unwrap_or_default()
+         println!("  -> Empty query, fetching recent symbols...");
+         match store.get_recent_symbols(limit) {
+             Ok(syms) => {
+                 println!("  -> Found {} recent symbols", syms.len());
+                 syms
+             },
+             Err(e) => {
+                 println!("  -> Error fetching recent symbols: {}", e);
+                 vec![]
+             }
+         }
     } else {
          store.search_content(&params.q, None, limit).unwrap_or_default()
     };

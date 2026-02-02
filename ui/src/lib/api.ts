@@ -47,7 +47,7 @@ export async function getStats() {
 }
 
 export async function search(query: string) {
-    if (!query) return [];
+    // metadata: Allowing empty search to fetch recent symbols
     const res = await fetch(`${API_BASE}/search?q=${encodeURIComponent(query)}`);
     return res.json() as Promise<SearchResult[]>;
 }
