@@ -1,12 +1,16 @@
-//! JavaScript language adapter
+//! JavaScript language adapter (DEPRECATED)
 //!
 //! Extracts symbols from JavaScript/TypeScript source files.
+//!
+//! **DEPRECATED**: Use `QueryAdapter::javascript()` instead, which is declarative
+//! and uses proper Tree-sitter queries for full AST extraction.
 
 use crate::Result;
 use crate::symbol::{Symbol, SymbolKind};
 use super::framework::{LanguageAdapter, AdapterResult};
 
-/// JavaScript language adapter
+/// JavaScript language adapter (DEPRECATED - use QueryAdapter::javascript() instead)
+#[deprecated(since = "0.2.0", note = "Use QueryAdapter::javascript() instead")]
 pub struct JavaScriptAdapter;
 
 impl JavaScriptAdapter {

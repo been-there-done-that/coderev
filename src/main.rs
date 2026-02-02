@@ -281,11 +281,11 @@ fn main() -> anyhow::Result<()> {
             println!("   Documents chunked: {}", total_docs_chunked);
             println!("   Unresolved refs: {}", total_unresolved);
             
-            // Phase 2: Run Global Linker
+            // Phase 2: Run Global Linker (Semantic)
             if total_unresolved > 0 {
-                println!("\n🔗 Phase 2: Running Global Linker...");
-                let resolver = coderev::query::Resolver::new(&store)?;
-                let stats = resolver.resolve_all()?;
+                println!("\n🔗 Phase 2: Running Global Linker (Semantic)...");
+                let resolver = coderev::query::SemanticResolver::new(&store)?;
+                let stats = resolver.resolve_all_semantic()?;
                 println!("{}", stats);
             } else {
                 println!("\n✅ No unresolved references to resolve.");
@@ -462,8 +462,8 @@ fn main() -> anyhow::Result<()> {
                 println!();
             }
             
-            let resolver = coderev::query::Resolver::new(&store)?;
-            let stats = resolver.resolve_all()?;
+            let resolver = coderev::query::SemanticResolver::new(&store)?;
+            let stats = resolver.resolve_all_semantic()?;
             
             println!("{}", stats);
             

@@ -114,11 +114,24 @@ impl AdapterRegistry {
     }
 }
 
-/// Create a default registry with all built-in adapters
+/// Create a default registry with all built-in adapters (using QueryAdapter)
 pub fn default_registry() -> AdapterRegistry {
     let mut registry = AdapterRegistry::new();
-    registry.register(super::python::PythonAdapter::new());
-    registry.register(super::javascript::JavaScriptAdapter::new());
+    
+    // Use query-based adapters for all languages
+    if let Ok(adapter) = super::query_adapter::QueryAdapter::python() {
+        registry.register(adapter);
+    }
+    if let Ok(adapter) = super::query_adapter::QueryAdapter::javascript() {
+        registry.register(adapter);
+    }
+    if let Ok(adapter) = super::query_adapter::QueryAdapter::rust() {
+        registry.register(adapter);
+    }
+    if let Ok(adapter) = super::query_adapter::QueryAdapter::go() {
+        registry.register(adapter);
+    }
+    
     registry
 }
 

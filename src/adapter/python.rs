@@ -1,6 +1,9 @@
-//! Python language adapter
+//! Python language adapter (DEPRECATED)
 //!
 //! Extracts symbols from Python source files using tree-sitter.
+//!
+//! **DEPRECATED**: Use `QueryAdapter::python()` instead, which is declarative
+//! and uses the same Tree-sitter queries as all other languages.
 
 use crate::{Result, Error};
 use crate::edge::{Edge, EdgeKind};
@@ -10,7 +13,8 @@ use crate::scope::graph::{ScopeId, ScopeKind, UnresolvedReference, Import};
 use super::framework::{LanguageAdapter, AdapterResult};
 use tree_sitter::{Parser, Node};
 
-/// Python language adapter
+/// Python language adapter (DEPRECATED - use QueryAdapter::python() instead)
+#[deprecated(since = "0.2.0", note = "Use QueryAdapter::python() instead")]
 pub struct PythonAdapter {
     parser: std::sync::Mutex<Parser>,
 }

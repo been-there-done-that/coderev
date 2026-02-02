@@ -59,6 +59,37 @@ impl QueryAdapter {
         Self::new(language, "Python", &["py", "pyi"], query_source)
     }
 
+    /// Create a JavaScript query adapter with embedded queries
+    pub fn javascript() -> Result<Self> {
+        let language = tree_sitter_javascript::LANGUAGE.into();
+        let query_source = include_str!("../../queries/javascript.scm");
+        Self::new(language, "JavaScript", &["js", "jsx", "mjs", "cjs"], query_source)
+    }
+
+    /// Create a Rust query adapter with embedded queries
+    pub fn rust() -> Result<Self> {
+        let language = tree_sitter_rust::LANGUAGE.into();
+        let query_source = include_str!("../../queries/rust.scm");
+        Self::new(language, "Rust", &["rs"], query_source)
+    }
+
+    /// Create a Go query adapter with embedded queries
+    pub fn go() -> Result<Self> {
+        let language = tree_sitter_go::LANGUAGE.into();
+        let query_source = include_str!("../../queries/go.scm");
+        Self::new(language, "Go", &["go"], query_source)
+    }
+
+    /// Get all supported query adapters
+    pub fn all() -> Vec<Result<Self>> {
+        vec![
+            Self::python(),
+            Self::javascript(),
+            Self::rust(),
+            Self::go(),
+        ]
+    }
+
     /// Parse a file and extract symbols using queries
     pub fn parse_file(&self, repo: &str, path: &str, content: &str) -> Result<AdapterResult> {
         let mut parser = Parser::new();
@@ -89,10 +120,9 @@ impl QueryAdapter {
         let mut current_class: Option<(String, SymbolUri)> = None;
         let mut current_function: Option<(String, SymbolUri)> = None;
 
-        // Process all query matches using streaming iterator pattern
-        use streaming_iterator::StreamingIterator;
+        // Process all query matches
         let mut matches = cursor.matches(&self.query, root, source_bytes);
-        while let Some(query_match) = matches.next() {
+        for query_match in matches {
             let mut captures: HashMap<&str, Node> = HashMap::new();
             
             for capture in query_match.captures {
@@ -310,6 +340,33 @@ impl QueryAdapter {
     pub fn file_extensions(&self) -> &[String] {
         &self.extensions
     }
+
+    /// Check if this adapter can handle a file extension
+    pub fn can_handle_extension(&self, ext: &str) -> bool {
+        self.extensions.iter().any(|e| e == ext)
+    }
+}
+
+/// Implement LanguageAdapter trait for QueryAdapter
+impl super::framework::LanguageAdapter for QueryAdapter {
+    fn language_name(&self) -> &str {
+        &self.language_name
+    }
+
+    fn file_extensions(&self) -> &[&str] {
+        // Return static slices based on language
+        match self.language_name.as_str() {
+            "Python" => &["py", "pyi"],
+            "JavaScript" => &["js", "jsx", "mjs", "cjs"],
+            "Rust" => &["rs"],
+            "Go" => &["go"],
+            _ => &[],
+        }
+    }
+
+    fn parse_file(&self, repo: &str, path: &str, content: &str) -> crate::Result<super::framework::AdapterResult> {
+        QueryAdapter::parse_file(self, repo, path, content)
+    }
 }
 
 #[cfg(test)]
@@ -347,5 +404,45 @@ class Greeter:
         let greeter_class = result.symbols.iter()
             .find(|s| s.name == "Greeter" && s.kind == SymbolKind::Container);
         assert!(greeter_class.is_some(), "Should find Greeter class");
+    }
+
+    #[test]
+    fn test_rust_query_adapter() {
+        let adapter = QueryAdapter::rust().expect("Failed to create Rust adapter");
+        
+        let source = r#"
+fn main() {
+    hello();
+}
+
+fn hello() {
+    println!("Hello");
+}
+
+struct Point {
+    x: i32,
+    y: i32,
+}
+
+impl Point {
+    fn new(x: i32, y: i32) -> Self {
+        Self { x, y }
+    }
+}
+"#;
+
+        let result = adapter.parse_file("test", "main.rs", source)
+            .expect("Failed to parse");
+
+        assert!(result.symbols.len() >= 4, "Expected at least 4 symbols, got {}", result.symbols.len());
+        
+        let main_fn = result.symbols.iter().find(|s| s.name == "main");
+        assert!(main_fn.is_some());
+        
+        let hello_fn = result.symbols.iter().find(|s| s.name == "hello");
+        assert!(hello_fn.is_some());
+        
+        let point_struct = result.symbols.iter().find(|s| s.name == "Point");
+        assert!(point_struct.is_some());
     }
 }

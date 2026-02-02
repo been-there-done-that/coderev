@@ -327,12 +327,222 @@ impl<'a> Resolver<'a> {
                     };
                 }
 
-                // Still ambiguous
+                // Still ambiguous - return for semantic resolution
                 ResolutionResult::Ambiguous {
                     candidates: global_matches.into_iter().cloned().collect(),
                 }
             }
         }
+    }
+}
+
+/// Semantic resolver that uses embeddings to disambiguate references
+pub struct SemanticResolver<'a> {
+    store: &'a SqliteStore,
+    index: SymbolIndex,
+}
+
+impl<'a> SemanticResolver<'a> {
+    /// Create a new semantic resolver
+    pub fn new(store: &'a SqliteStore) -> Result<Self> {
+        let index = SymbolIndex::build_from_store(store)?;
+        Ok(Self { store, index })
+    }
+
+    /// Resolve all references with semantic disambiguation
+    pub fn resolve_all_semantic(&self) -> Result<SemanticResolverStats> {
+        use super::EmbeddingEngine;
+        
+        let unresolved = self.store.get_all_unresolved()?;
+        let mut stats = SemanticResolverStats::default();
+        
+        stats.total = unresolved.len();
+
+        // Create the basic resolver first
+        let basic_resolver = Resolver::new(self.store)?;
+        
+        // Collect ambiguous references for batch processing
+        let mut ambiguous_refs: Vec<(&PersistedUnresolvedReference, Vec<SymbolUri>)> = Vec::new();
+
+        for unresolved_ref in &unresolved {
+            match basic_resolver.resolve_one(unresolved_ref) {
+                ResolutionResult::Resolved { target_uri, confidence, strategy } => {
+                    let edge_kind = if unresolved_ref.is_inheritance() {
+                        EdgeKind::Inherits
+                    } else {
+                        EdgeKind::Calls
+                    };
+
+                    if let Ok(from_uri) = SymbolUri::parse(&unresolved_ref.from_uri) {
+                        let edge = Edge::with_confidence(
+                            from_uri,
+                            target_uri,
+                            edge_kind,
+                            confidence,
+                        );
+                        self.store.insert_edge(&edge)?;
+                        self.store.delete_unresolved(unresolved_ref.id)?;
+                        stats.resolved += 1;
+                        
+                        match strategy {
+                            ResolutionStrategy::LocalScope => stats.by_local += 1,
+                            ResolutionStrategy::Import => stats.by_import += 1,
+                            ResolutionStrategy::ContainerMethod => stats.by_container += 1,
+                            ResolutionStrategy::Inheritance => stats.by_inheritance += 1,
+                            ResolutionStrategy::GlobalName => stats.by_global += 1,
+                        }
+                    }
+                }
+                ResolutionResult::Ambiguous { candidates } => {
+                    ambiguous_refs.push((unresolved_ref, candidates));
+                }
+                ResolutionResult::Unresolved => {
+                    stats.unresolved += 1;
+                }
+            }
+        }
+
+        // Phase 5: Use embeddings to disambiguate ambiguous references
+        if !ambiguous_refs.is_empty() {
+            match EmbeddingEngine::new() {
+                Ok(embedding_engine) => {
+                    for (unresolved_ref, candidates) in ambiguous_refs {
+                        match self.resolve_with_embeddings(
+                            &embedding_engine,
+                            unresolved_ref,
+                            &candidates,
+                        ) {
+                            Ok(Some((target_uri, confidence))) => {
+                                let edge_kind = if unresolved_ref.is_inheritance() {
+                                    EdgeKind::Inherits
+                                } else {
+                                    EdgeKind::Calls
+                                };
+
+                                if let Ok(from_uri) = SymbolUri::parse(&unresolved_ref.from_uri) {
+                                    let edge = Edge::with_confidence(
+                                        from_uri,
+                                        target_uri,
+                                        edge_kind,
+                                        confidence,
+                                    );
+                                    self.store.insert_edge(&edge)?;
+                                    self.store.delete_unresolved(unresolved_ref.id)?;
+                                    stats.resolved += 1;
+                                    stats.by_semantic += 1;
+                                }
+                            }
+                            Ok(None) => {
+                                stats.ambiguous += 1;
+                            }
+                            Err(e) => {
+                                tracing::warn!("Semantic resolution failed: {}", e);
+                                stats.ambiguous += 1;
+                            }
+                        }
+                    }
+                }
+                Err(e) => {
+                    tracing::warn!("Failed to initialize embedding engine: {}", e);
+                    stats.ambiguous += ambiguous_refs.len();
+                }
+            }
+        }
+
+        Ok(stats)
+    }
+
+    /// Use embeddings to pick the best candidate from ambiguous matches
+    fn resolve_with_embeddings(
+        &self,
+        engine: &super::EmbeddingEngine,
+        unresolved: &PersistedUnresolvedReference,
+        candidates: &[SymbolUri],
+    ) -> Result<Option<(SymbolUri, f32)>> {
+        // Get the calling context (the symbol that contains the reference)
+        let caller_symbol = if let Ok(from_uri) = SymbolUri::parse(&unresolved.from_uri) {
+            self.store.get_symbol(&from_uri)?
+        } else {
+            return Ok(None);
+        };
+
+        let Some(caller) = caller_symbol else {
+            return Ok(None);
+        };
+
+        // Build a context string for the reference
+        let context = format!(
+            "Call to {} from function {} in file {}: {}",
+            unresolved.name,
+            caller.name,
+            caller.path,
+            caller.content.chars().take(500).collect::<String>()
+        );
+
+        // Embed the context
+        let context_embedding = engine.embed_query(&context)?;
+
+        // Get embeddings for all candidates (either from DB or compute)
+        let mut best_match: Option<(SymbolUri, f32)> = None;
+        let mut best_similarity: f32 = -1.0;
+
+        for candidate_uri in candidates {
+            // Try to get pre-computed embedding from store
+            let candidate_embedding = if let Ok(Some(emb)) = self.store.get_embedding(candidate_uri) {
+                emb
+            } else {
+                // Compute embedding on-the-fly
+                if let Some(candidate_symbol) = self.index.get_symbol(candidate_uri) {
+                    let embeddings = engine.embed_symbols(&[candidate_symbol.clone()])?;
+                    if !embeddings.is_empty() {
+                        embeddings.into_iter().next().unwrap()
+                    } else {
+                        continue;
+                    }
+                } else {
+                    continue;
+                }
+            };
+
+            // Compute cosine similarity
+            let similarity = cosine_similarity(&context_embedding, &candidate_embedding);
+            
+            if similarity > best_similarity {
+                best_similarity = similarity;
+                best_match = Some((candidate_uri.clone(), similarity));
+            }
+        }
+
+        // Only return if we have a clear winner (similarity > threshold)
+        const SIMILARITY_THRESHOLD: f32 = 0.5;
+        const CONFIDENCE_MULTIPLIER: f32 = 0.6; // semantic matches get lower base confidence
+
+        if let Some((uri, similarity)) = best_match {
+            if similarity > SIMILARITY_THRESHOLD {
+                // Scale confidence: 0.5-1.0 similarity → 0.6-0.84 confidence
+                let confidence = CONFIDENCE_MULTIPLIER + (similarity - SIMILARITY_THRESHOLD) * 0.48;
+                return Ok(Some((uri, confidence)));
+            }
+        }
+
+        Ok(None)
+    }
+}
+
+/// Compute cosine similarity between two vectors
+fn cosine_similarity(a: &[f32], b: &[f32]) -> f32 {
+    if a.len() != b.len() || a.is_empty() {
+        return 0.0;
+    }
+
+    let dot: f32 = a.iter().zip(b.iter()).map(|(x, y)| x * y).sum();
+    let norm_a: f32 = a.iter().map(|x| x * x).sum::<f32>().sqrt();
+    let norm_b: f32 = b.iter().map(|x| x * x).sum::<f32>().sqrt();
+
+    if norm_a == 0.0 || norm_b == 0.0 {
+        0.0
+    } else {
+        dot / (norm_a * norm_b)
     }
 }
 
@@ -369,7 +579,7 @@ pub struct ResolverStats {
 
 impl std::fmt::Display for ResolverStats {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        writeln!(f, "Resolution Statistics:")?;
+        writeln!(f, "Resolution Statistics (Basic):")?;
         writeln!(f, "  Total references: {}", self.total)?;
         writeln!(f, "  ✅ Resolved: {} ({:.1}%)", 
             self.resolved, 
@@ -382,6 +592,40 @@ impl std::fmt::Display for ResolverStats {
         writeln!(f, "    Container method: {}", self.by_container)?;
         writeln!(f, "    Inheritance: {}", self.by_inheritance)?;
         writeln!(f, "    Global name: {}", self.by_global)
+    }
+}
+
+/// Statistics from the semantic resolution pass
+#[derive(Debug, Default)]
+pub struct SemanticResolverStats {
+    pub total: usize,
+    pub resolved: usize,
+    pub ambiguous: usize,
+    pub unresolved: usize,
+    pub by_local: usize,
+    pub by_import: usize,
+    pub by_container: usize,
+    pub by_inheritance: usize,
+    pub by_global: usize,
+    pub by_semantic: usize,
+}
+
+impl std::fmt::Display for SemanticResolverStats {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        writeln!(f, "Resolution Statistics (Semantic):")?;
+        writeln!(f, "  Total references: {}", self.total)?;
+        writeln!(f, "  ✅ Resolved: {} ({:.1}%)", 
+            self.resolved, 
+            if self.total > 0 { self.resolved as f64 / self.total as f64 * 100.0 } else { 0.0 })?;
+        writeln!(f, "  ⚠️  Ambiguous: {}", self.ambiguous)?;
+        writeln!(f, "  ❌ Unresolved: {}", self.unresolved)?;
+        writeln!(f, "  Resolution breakdown:")?;
+        writeln!(f, "    Local scope: {}", self.by_local)?;
+        writeln!(f, "    Import: {}", self.by_import)?;
+        writeln!(f, "    Container method: {}", self.by_container)?;
+        writeln!(f, "    Inheritance: {}", self.by_inheritance)?;
+        writeln!(f, "    Global name: {}", self.by_global)?;
+        writeln!(f, "    🧠 Semantic (embeddings): {}", self.by_semantic)
     }
 }
 
