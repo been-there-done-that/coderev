@@ -176,7 +176,7 @@ fn main() -> anyhow::Result<()> {
                     .unwrap_or_else(|| "unknown".to_string())
             });
             
-            let store = SqliteStore::open(&database)?;
+            let mut store = SqliteStore::open(&database)?;
             let registry = adapter::default_registry();
             let chunker = adapter::DocumentChunker::new();
             let mut total_symbols = 0;
@@ -197,8 +197,14 @@ fn main() -> anyhow::Result<()> {
                 .filter(|e| e.file_type().is_file())
             {
                 let file_path = entry.path();
-                let ext = file_path.extension().and_then(|s| s.to_str()).unwrap_or("");
+                let ext = file_path.extension().and_then(|s| s.to_str()).unwrap_or("").to_lowercase();
                 
+                // Skip common binary files
+                let skip_exts = ["png", "jpg", "jpeg", "gif", "ico", "exe", "dll", "so", "o", "a", "lib", "bin", "pdf", "zip", "tar", "gz", "wasm", "node"];
+                if skip_exts.contains(&ext.as_str()) {
+                    continue;
+                }
+
                 if let Some(adapter) = registry.find_adapter(file_path) {
                     // AST-based parsing for supported languages
                     let relative_path = file_path.strip_prefix(&path).unwrap_or(file_path);
@@ -243,10 +249,10 @@ fn main() -> anyhow::Result<()> {
                             }
                         }
                         Err(e) => {
-                            tracing::error!("Failed to read {}: {}", file_path.display(), e);
+                            tracing::debug!("Skipping binary/unreadable file {}: {}", file_path.display(), e);
                         }
                     }
-                } else if adapter::DocumentChunker::supports_extension(ext) {
+                } else {
                     // Fallback: Chunk-based indexing for documents without AST adapter
                     let relative_path = file_path.strip_prefix(&path).unwrap_or(file_path);
                     let relative_path_str = relative_path.to_str().unwrap_or("");
@@ -269,7 +275,7 @@ fn main() -> anyhow::Result<()> {
                             }
                         }
                         Err(e) => {
-                            tracing::debug!("Skipping binary/unreadable file {}: {}", file_path.display(), e);
+                            tracing::debug!("Skipping unreadable file {}: {}", file_path.display(), e);
                         }
                     }
                 }
@@ -288,7 +294,34 @@ fn main() -> anyhow::Result<()> {
                 let stats = resolver.resolve_all_semantic()?;
                 println!("{}", stats);
             } else {
-                println!("\n✅ No unresolved references to resolve.");
+                println!("\n✅ Phase 2: No unresolved references to resolve.");
+            }
+
+            // Phase 3: Generate Semantic Embeddings
+            println!("\n🧠 Phase 3: Generating Semantic Embeddings...");
+            let symbols_to_embed = store.find_symbols_without_embeddings()?;
+            
+            if !symbols_to_embed.is_empty() {
+                println!("🛰️  Generating embeddings for {} symbols in batches...", symbols_to_embed.len());
+                let engine = coderev::query::EmbeddingEngine::new()?;
+                
+                let batch_size = 32;
+                let mut processed = 0;
+                
+                for chunk in symbols_to_embed.chunks(batch_size) {
+                    let embeddings = engine.embed_symbols(chunk)?;
+                    
+                    store.begin_transaction()?;
+                    for (i, vector) in embeddings.into_iter().enumerate() {
+                        store.insert_embedding(&chunk[i].uri, &vector)?;
+                    }
+                    store.commit()?;
+                    
+                    processed += chunk.len();
+                    println!("   Progress: {}/{}", processed, symbols_to_embed.len());
+                }
+            } else {
+                println!("✅ All symbols already have embeddings.");
             }
 
             println!("\n✅ Indexing complete!");
@@ -300,8 +333,7 @@ fn main() -> anyhow::Result<()> {
         }
 
         Commands::Search { query, database, limit, kind, vector } => {
-            let store = SqliteStore::open(&database)?;
-            let engine = QueryEngine::new(&store);
+            let mut store = SqliteStore::open(&database)?;
             
             let parsed_kind = if let Some(ref k) = kind {
                 use std::str::FromStr;
@@ -311,7 +343,11 @@ fn main() -> anyhow::Result<()> {
             };
 
             let results = if vector {
+                // Ensure embeddings exist before searching
+                ensure_embeddings(&mut store)?;
+                
                 println!("🧠 [Local Embedding] Searching for: '{}'...", query);
+                let engine = QueryEngine::new(&store);
                 let embedding_engine = coderev::query::EmbeddingEngine::new()?;
                 let query_vector = embedding_engine.embed_query(&query)?;
                 engine.search_by_vector(&query_vector, limit)?
@@ -340,41 +376,14 @@ fn main() -> anyhow::Result<()> {
 
         Commands::Embed { database, model: _ } => {
             let mut store = SqliteStore::open(&database)?;
-            let symbols = store.find_symbols_by_name_pattern("%")?; // Get all symbols
-            
-            if symbols.is_empty() {
-                println!("∅ No symbols found in database to embed.");
-                return Ok(());
-            }
-
-            println!("🧠 Initializing real local embedding model (all-MiniLM-L6-v2)...");
-            let engine = coderev::query::EmbeddingEngine::new()?;
-            
-            println!("🛰️  Generating embeddings for {} symbols in batches...", symbols.len());
-            
-            // Batch processing (32 symbols at a time)
-            let batch_size = 32;
-            let mut processed = 0;
-            
-            for chunk in symbols.chunks(batch_size) {
-                let embeddings = engine.embed_symbols(chunk)?;
-                
-                // Store embeddings in a transaction for speed
-                store.begin_transaction()?;
-                for (i, vector) in embeddings.into_iter().enumerate() {
-                    store.insert_embedding(&chunk[i].uri, &vector)?;
-                }
-                store.commit()?;
-                
-                processed += chunk.len();
-                println!("  Progress: {}/{}", processed, symbols.len());
-            }
-            
-            println!("✅ Embedding complete! All symbols now have real vectors.");
+            ensure_embeddings(&mut store)?;
+            println!("✅ Embedding complete!");
         }
 
         Commands::Callers { uri, database, depth } => {
             let store = SqliteStore::open(&database)?;
+            ensure_resolved(&store)?;
+            
             let engine = QueryEngine::new(&store);
             let target_uri = coderev::uri::SymbolUri::parse(&uri)?;
             
@@ -392,6 +401,8 @@ fn main() -> anyhow::Result<()> {
 
         Commands::Callees { uri, database, depth } => {
             let store = SqliteStore::open(&database)?;
+            ensure_resolved(&store)?;
+            
             let engine = QueryEngine::new(&store);
             let target_uri = coderev::uri::SymbolUri::parse(&uri)?;
             
@@ -409,6 +420,8 @@ fn main() -> anyhow::Result<()> {
 
         Commands::Impact { uri, database, depth, format } => {
             let store = SqliteStore::open(&database)?;
+            ensure_resolved(&store)?;
+            
             let engine = QueryEngine::new(&store);
             let target_uri = coderev::uri::SymbolUri::parse(&uri)?;
             
@@ -483,5 +496,45 @@ fn main() -> anyhow::Result<()> {
         }
     }
 
+    Ok(())
+}
+
+/// Helper to ensure all symbols have embeddings
+fn ensure_embeddings(store: &mut SqliteStore) -> anyhow::Result<()> {
+    let missing = store.find_symbols_without_embeddings()?;
+    if !missing.is_empty() {
+        println!("🧠 On-demand: Generating embeddings for {} symbols...", missing.len());
+        let engine = coderev::query::EmbeddingEngine::new()?;
+        
+        let batch_size = 32;
+        let mut processed = 0;
+        let total = missing.len();
+        
+        for chunk in missing.chunks(batch_size) {
+            let embeddings = engine.embed_symbols(chunk)?;
+            
+            store.begin_transaction()?;
+            for (i, vector) in embeddings.into_iter().enumerate() {
+                store.insert_embedding(&chunk[i].uri, &vector)?;
+            }
+            store.commit()?;
+            
+            processed += chunk.len();
+            println!("   Progress: {}/{}", processed, total);
+        }
+        println!("✅ Embedding complete.");
+    }
+    Ok(())
+}
+
+/// Helper to ensure all unresolved references are resolved
+fn ensure_resolved(store: &SqliteStore) -> anyhow::Result<()> {
+    let unresolved_count = store.count_unresolved()?;
+    if unresolved_count > 0 {
+        println!("🔗 On-demand: Resolving {} references...", unresolved_count);
+        let resolver = coderev::query::SemanticResolver::new(store)?;
+        let stats = resolver.resolve_all_semantic()?;
+        println!("{}", stats);
+    }
     Ok(())
 }

@@ -168,6 +168,24 @@ impl SqliteStore {
         Ok(count as usize)
     }
 
+    /// Find all symbols that don't have an embedding yet
+    pub fn find_symbols_without_embeddings(&self) -> Result<Vec<Symbol>> {
+        let mut stmt = self.conn.prepare(
+            r#"
+            SELECT uri, kind, name, path, line_start, line_end, doc, signature, content 
+            FROM symbols 
+            WHERE uri NOT IN (SELECT uri FROM embeddings)
+            "#
+        )?;
+        
+        let symbols = stmt
+            .query_map([], |row| self.row_to_symbol(row))?
+            .filter_map(|r| r.ok())
+            .collect();
+        
+        Ok(symbols)
+    }
+
     /// Helper to convert a row to a Symbol
     fn row_to_symbol(&self, row: &rusqlite::Row) -> rusqlite::Result<Symbol> {
         let uri_str: String = row.get(0)?;
