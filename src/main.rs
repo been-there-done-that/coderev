@@ -5,7 +5,7 @@ use std::path::PathBuf;
 use coderev::storage::SqliteStore;
 use coderev::adapter;
 use coderev::query::QueryEngine;
-use coderev::SymbolKind;
+use coderev::{SymbolKind, IndexMessage, FileStatus};
 use tracing_subscriber::{fmt, prelude::*, EnvFilter};
 use std::io::Write;
 
@@ -206,178 +206,188 @@ async fn main() -> anyhow::Result<()> {
             });
             
             let store = SqliteStore::open(&database)?;
-            let registry = adapter::default_registry();
-            let chunker = adapter::DocumentChunker::new();
             let mut stats = IndexingStats::default();
 
             println!("🚀 Indexing repository: {}", repo_name);
             println!("📂 Path: {:?}", path);
             println!("🗄️  Database: {:?}", database);
             
-            // Track seen files to detect deletions later
-            let mut seen_paths = std::collections::HashSet::new();
-
-            // Configure file walker with smart ignores
-            let mut builder = ignore::WalkBuilder::new(&path);
-            builder.standard_filters(true)
-                .add_custom_ignore_filename(".cursorignore");
-
-            // Add default ignores for common junk folders via manual filter
-            builder.filter_entry(|entry| {
-                let name = entry.file_name().to_string_lossy();
-                let ignored = [
-                    "node_modules",
-                    ".venv",
-                    "env",
-                    ".env",
-                    "vendor",
-                    "target",
-                    "dist",
-                    "build",
-                    "__pycache__",
-                    ".git",
-                    ".idea",
-                    ".vscode",
-                    ".gitignore",
-                    ".DS_Store"
-                ];
-                !ignored.contains(&name.as_ref())
-            });
-
-            for result in builder.build() {
-                let entry = match result {
-                    Ok(e) => e,
-                    Err(err) => {
-                        tracing::error!("Error walking directory: {}", err);
-                        continue;
-                    }
-                };
-
-                if !entry.file_type().map(|ft| ft.is_file()).unwrap_or(false) {
-                    continue;
-                }
-                
-                let file_path = entry.path();
-                let ext = file_path.extension().and_then(|s| s.to_str()).unwrap_or("").to_lowercase();
-                
-                // Skip common binary files (keep this as a secondary check)
-                let skip_exts = ["png", "jpg", "jpeg", "gif", "ico", "exe", "dll", "so", "o", "a", "lib", "bin", "pdf", "zip", "tar", "gz", "wasm", "node", "db", "sqlite", "lock", "pyc", "svg"];
-                if skip_exts.contains(&ext.as_str()) {
-                    continue;
-                }
-                
-                // Read content once
-                let content = match std::fs::read_to_string(file_path) {
-                    Ok(c) => c,
-                    Err(e) => {
-                        tracing::debug!("Skipping binary/unreadable file {}: {}", file_path.display(), e);
-                        continue;
-                    }
-                };
-
-                // Calculate Hash
-                let new_hash = blake3::hash(content.as_bytes()).to_string();
-                let relative_path = file_path.strip_prefix(&path).unwrap_or(file_path);
-                let relative_path_str = relative_path.to_str().unwrap_or("");
-                
-                seen_paths.insert(relative_path_str.to_string());
-
-                // Check change status
-                let stored_hash = store.get_file_hash(relative_path_str)?;
-                if let Some(h) = stored_hash {
-                    if h == new_hash {
-                        // Unchanged
-                        stats.unchanged += 1;
-                        tracing::debug!("Skipping unchanged file: {}", relative_path_str);
-                        continue;
-                    } else {
-                        // Modified
-                        println!("📝 Modified: {:?}", relative_path);
-                        store.delete_file_data(relative_path_str)?;
-                        stats.modified += 1;
-                    }
-                } else {
-                    // New
-                    println!("✨ New: {:?}", relative_path);
-                    stats.added += 1;
-                }
-
-                // Process File
-                if let Some(adapter) = registry.find_adapter(file_path) {
-                    // AST-based parsing
-                    match adapter.parse_file(&repo_name, relative_path_str, &content) {
-                        Ok(res) => {
-                            for symbol in &res.symbols {
-                                store.insert_symbol(symbol)?;
-                            }
-                            for edge in &res.edges {
-                                store.insert_edge(edge)?;
-                            }
-                            for unresolved in res.scope_graph.unresolved_references() {
-                                let (receiver, name) = if let Some((r, n)) = unresolved.name.rsplit_once('.') {
-                                    (Some(r.to_string()), n.to_string())
-                                } else {
-                                    (None, unresolved.name.clone())
-                                };
-
-                                let persisted = coderev::storage::PersistedUnresolvedReference::new(
-                                    unresolved.from_uri.to_uri_string(),
-                                    name,
-                                    receiver,
-                                    unresolved.scope.0 as i64,
-                                    relative_path_str.to_string(),
-                                    unresolved.line,
-                                    "call",
-                                );
-                                store.insert_unresolved(&persisted)?;
-                            }
-                            for import in res.scope_graph.imports(coderev::scope::graph::ScopeId::root()) {
-                                store.insert_import(
-                                    relative_path_str,
-                                    import.alias.as_deref(),
-                                    &import.namespace,
-                                    Some(import.line),
-                                )?;
-                            }
-                            stats.symbols += res.symbols.len();
-                        }
-                        Err(e) => {
-                            tracing::error!("Failed to parse {}: {}", file_path.display(), e);
-                            stats.errors += 1;
-                        }
-                    }
-                } else {
-                    // Chunk-based indexing
-                    match chunker.chunk_file(&repo_name, relative_path_str, &content) {
-                        Ok(res) => {
-                            for symbol in &res.symbols {
-                                store.insert_symbol(symbol)?;
-                            }
-                            stats.symbols += res.symbols.len();
-                            stats.chunked += 1;
-                        }
-                        Err(e) => {
-                            tracing::error!("Failed to chunk {}: {}", file_path.display(), e);
-                            stats.errors += 1;
-                        }
-                    }
-                }
-
-                // Update hash
-                store.update_file_hash(relative_path_str, &new_hash)?;
-            }
+            // Channel for worker-to-coordinator communication
+            let (tx, rx) = std::sync::mpsc::channel::<IndexMessage>();
             
-            // Handle Deletions
-            {
-                let db_paths = store.get_all_indexed_files()?;
+            // Configure file walker
+            let walker = ignore::WalkBuilder::new(&path)
+                .standard_filters(true)
+                .add_custom_ignore_filename(".cursorignore")
+                .build_parallel();
+
+            let repo_name_clone = repo_name.clone();
+            let path_clone = path.clone();
+
+            // Spawn workers
+            std::thread::scope(|scope| {
+                // Coordinator "thread" (runs in current scope)
+                let coordinator = scope.spawn(|| {
+                    let mut seen_paths = std::collections::HashSet::new();
+                    
+                    for msg in rx {
+                        match msg {
+                            IndexMessage::Processed { 
+                                relative_path, 
+                                hash, 
+                                result, 
+                                status 
+                            } => {
+                                seen_paths.insert(relative_path.clone());
+                                
+                                match status {
+                                    FileStatus::Unchanged => {
+                                        stats.unchanged += 1;
+                                    }
+                                    FileStatus::Modified => {
+                                        println!("📝 Modified: {}", relative_path);
+                                        store.delete_file_data(&relative_path).ok();
+                                        stats.modified += 1;
+                                    }
+                                    FileStatus::New => {
+                                        println!("✨ New: {}", relative_path);
+                                        stats.added += 1;
+                                    }
+                                }
+
+                                if let Some(res) = result {
+                                    // AST symbols
+                                    for symbol in &res.symbols {
+                                        store.insert_symbol(symbol).ok();
+                                    }
+                                    for edge in &res.edges {
+                                        store.insert_edge(edge).ok();
+                                    }
+                                    for unresolved in res.scope_graph.unresolved_references() {
+                                        let (receiver, name) = if let Some((r, n)) = unresolved.name.rsplit_once('.') {
+                                            (Some(r.to_string()), n.to_string())
+                                        } else {
+                                            (None, unresolved.name.clone())
+                                        };
+
+                                        let persisted = coderev::storage::PersistedUnresolvedReference::new(
+                                            unresolved.from_uri.to_uri_string(),
+                                            name,
+                                            receiver,
+                                            unresolved.scope.0 as i64,
+                                            relative_path.clone(),
+                                            unresolved.line,
+                                            "call",
+                                        );
+                                        store.insert_unresolved(&persisted).ok();
+                                    }
+                                    for import in res.scope_graph.imports(coderev::scope::graph::ScopeId::root()) {
+                                        store.insert_import(
+                                            &relative_path,
+                                            import.alias.as_deref(),
+                                            &import.namespace,
+                                            Some(import.line),
+                                        ).ok();
+                                    }
+                                    stats.symbols += res.symbols.len();
+                                }
+                                
+                                store.update_file_hash(&relative_path, &hash).ok();
+                            }
+                            IndexMessage::Error(path, err) => {
+                                tracing::error!("Error processing {}: {}", path, err);
+                                stats.errors += 1;
+                            }
+                        }
+                    }
+                    seen_paths
+                });
+
+                // Worker threads
+                walker.run(|| {
+                    let tx = tx.clone();
+                    let repo_name = repo_name_clone.clone();
+                    let root_path = path_clone.clone();
+                    let registry = adapter::default_registry();
+                    let chunker = adapter::DocumentChunker::new();
+                    let store = SqliteStore::open(&database).expect("Failed to open DB in worker"); // Read-only access for hash check
+
+                    Box::new(move |result| {
+                        let entry = match result {
+                            Ok(e) => e,
+                            Err(_) => return ignore::WalkState::Continue,
+                        };
+
+                        if !entry.file_type().map(|ft| ft.is_file()).unwrap_or(false) {
+                            return ignore::WalkState::Continue;
+                        }
+
+                        let file_path = entry.path();
+                        let ext = file_path.extension().and_then(|s| s.to_str()).unwrap_or("").to_lowercase();
+                        
+                        let skip_exts = ["png", "jpg", "jpeg", "gif", "ico", "exe", "dll", "so", "o", "a", "lib", "bin", "pdf", "zip", "tar", "gz", "wasm", "node", "db", "sqlite", "lock", "pyc", "svg"];
+                        if skip_exts.contains(&ext.as_str()) {
+                            return ignore::WalkState::Continue;
+                        }
+
+                        let content = match std::fs::read_to_string(file_path) {
+                            Ok(c) => c,
+                            Err(_) => return ignore::WalkState::Continue,
+                        };
+
+                        let hash = blake3::hash(content.as_bytes()).to_string();
+                        let relative_path = file_path.strip_prefix(&root_path).unwrap_or(file_path);
+                        let relative_path_str = relative_path.to_str().unwrap_or("").to_string();
+
+                        // Check status
+                        let status = match store.get_file_hash(&relative_path_str) {
+                            Ok(Some(h)) if h == hash => FileStatus::Unchanged,
+                            Ok(Some(_)) => FileStatus::Modified,
+                            _ => FileStatus::New,
+                        };
+
+                        if status == FileStatus::Unchanged {
+                            tx.send(IndexMessage::Processed {
+                                relative_path: relative_path_str,
+                                hash,
+                                result: None,
+                                status,
+                            }).ok();
+                            return ignore::WalkState::Continue;
+                        }
+
+                        // Process file
+                        let result = if let Some(adapter) = registry.find_adapter(file_path) {
+                            adapter.parse_file(&repo_name, &relative_path_str, &content).ok()
+                        } else {
+                            chunker.chunk_file(&repo_name, &relative_path_str, &content).ok()
+                        };
+
+                        tx.send(IndexMessage::Processed {
+                            relative_path: relative_path_str,
+                            hash,
+                            result,
+                            status,
+                        }).ok();
+
+                        ignore::WalkState::Continue
+                    })
+                });
+
+                // Close channel by dropping remaining tx
+                drop(tx);
+
+                // Wait for coordinator and handle deletions
+                let seen_paths = coordinator.join().unwrap();
+                let db_paths = store.get_all_indexed_files().unwrap_or_default();
                 for db_path in db_paths {
                     if !seen_paths.contains(&db_path) {
                         println!("🗑️  Deleted: {}", db_path);
-                        store.delete_file_data(&db_path)?;
+                        store.delete_file_data(&db_path).ok();
                         stats.deleted += 1;
                     }
                 }
-            }
+            });
 
             println!("\n📊 Indexing Summary:");
             println!("   Unchanged: {}", stats.unchanged);
@@ -387,7 +397,6 @@ async fn main() -> anyhow::Result<()> {
             println!("   Errors:    {}", stats.errors);
 
             // Phase 2: Linking
-            // Only run linking if there were changes or if there are unresolved references
             let something_changed = stats.added > 0 || stats.modified > 0 || stats.deleted > 0;
             let unresolved_count = store.count_unresolved()?;
             
@@ -653,12 +662,14 @@ async fn main() -> anyhow::Result<()> {
 fn ensure_embeddings(store: &SqliteStore) -> anyhow::Result<()> {
     let missing = store.find_symbols_without_embeddings()?;
     if !missing.is_empty() {
-        println!("🧠 On-demand: Generating embeddings for {} symbols...", missing.len());
         let engine = coderev::query::EmbeddingEngine::new()?;
-        
         let batch_size = 32;
         let mut processed = 0;
         let total = missing.len();
+        
+        println!("   Generating {} symbol embeddings...", total);
+        print!("   Progress: 0 / {}", total);
+        std::io::stdout().flush().ok();
         
         for chunk in missing.chunks(batch_size) {
             let embeddings = engine.embed_symbols(chunk)?;
@@ -670,7 +681,7 @@ fn ensure_embeddings(store: &SqliteStore) -> anyhow::Result<()> {
             store.commit()?;
             
             processed += chunk.len();
-            print!("\r   Progress: {}/{}", processed, total);
+            print!("\r   Progress: {} / {}", processed, total);
             std::io::stdout().flush().ok();
         }
         println!();

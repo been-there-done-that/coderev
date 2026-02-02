@@ -57,6 +57,13 @@ impl<'a> SemanticLinker<'a> {
 
         // Phase 2: Batch process targets
         let batch_size = 32;
+        let mut processed = 0;
+        let total_targets = targets.len();
+        
+        println!("   Processing {} semantic candidates...", total_targets);
+        print!("   Progress: 0 / {}", total_targets);
+        std::io::stdout().flush().ok();
+
         for chunk in targets.chunks(batch_size) {
             // 1. Prepare batch for embedding
             let mut batch_data = Vec::with_capacity(chunk.len());
@@ -90,6 +97,7 @@ impl<'a> SemanticLinker<'a> {
                 // Sort and take top 5
                 matches.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
                 
+                let mut matched = false;
                 for (sym_uri, score) in matches.into_iter().take(5) {
                     let edge = Edge::with_confidence(
                         SymbolUri::parse(&ref_item.from_uri)?,
@@ -109,13 +117,23 @@ impl<'a> SemanticLinker<'a> {
                     }
                     
                     self.store.insert_edge(&edge)?;
+                    matched = true;
                     resolved += 1;
-                    candidates_count += 1;
                 }
+                
+                if matched {
+                    self.store.delete_unresolved(ref_item.id)?;
+                } else {
+                    // Mark as external so we don't retry forever
+                    self.store.mark_unresolved_as_external(ref_item.id)?;
+                }
+                
+                processed += 1;
+                candidates_count += 1; // Used for "impact" or internal tracking, but 'processed' is better for UI
             }
             self.store.commit()?;
             
-            print!("\r   Progress: {} processed, {} resolved", candidates_count, resolved);
+            print!("\r   Progress: {} / {} ({} resolved)", processed, total_targets, resolved);
             std::io::stdout().flush().ok();
         }
 

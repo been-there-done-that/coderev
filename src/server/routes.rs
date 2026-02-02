@@ -46,7 +46,9 @@ pub async fn handle_search(
 
     let engine = QueryEngine::new(&state.store);
     
-    let results = if vector {
+    let is_empty_query = params.query.trim().is_empty();
+
+    let results = if vector && !is_empty_query {
         let embedding_engine = crate::query::EmbeddingEngine::new()
             .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, Json(ErrorResponse { error: format!("Failed to initialize embedding engine: {}", e) })))?;
         

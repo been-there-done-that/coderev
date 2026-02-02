@@ -156,7 +156,7 @@ impl SqliteStore {
             .collect();
         
         if words.is_empty() {
-            return Ok(vec![]);
+            return self.get_recent_symbols(limit);
         }
 
         let mut conditions = Vec::new();
@@ -776,9 +776,13 @@ impl SqliteStore {
         Ok(())
     }
 
-    /// Count unresolved references
+    /// Count unresolved references (active ones, not marked as external)
     pub fn count_unresolved(&self) -> Result<usize> {
-        let count: i64 = self.lock_conn()?.query_row("SELECT COUNT(*) FROM unresolved_references", [], |row| row.get(0))?;
+        let count: i64 = self.lock_conn()?.query_row(
+            "SELECT COUNT(*) FROM unresolved_references WHERE is_external = 0", 
+            [], 
+            |row| row.get(0)
+        )?;
         Ok(count as usize)
     }
 
