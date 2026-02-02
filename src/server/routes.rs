@@ -83,7 +83,38 @@ pub async fn search(
              }
          }
     } else {
-         store.search_content(&params.q, None, limit).unwrap_or_default()
+        // 1. Text Search (Exact/Like)
+        let mut text_results = store.search_content(&params.q, None, limit).unwrap_or_default();
+
+        // 2. Vector Search (Fallback or explicit)
+        // If strict search failed, or user requested it, try semantic search
+        if text_results.is_empty() && !params.q.trim().is_empty() {
+            println!("  -> Text search yielded 0 results. Falling back to Semantic Search...");
+            
+            let mut engine_guard = state.embedding_engine.lock().await;
+            
+            // Initialize if not present
+            if engine_guard.is_none() {
+                 println!("  -> Initializing Embedding Model...");
+                 match crate::query::EmbeddingEngine::new() {
+                     Ok(eng) => *engine_guard = Some(eng),
+                     Err(e) => println!("  -> Failed to load embedding model: {}", e),
+                 }
+            }
+
+            if let Some(engine) = engine_guard.as_ref() {
+                match engine.embed_query(&params.q) {
+                    Ok(query_vector) => {
+                        if let Ok(semantic_results) = store.search_by_vector(&query_vector, limit) {
+                            println!("  -> Semantic Search found {} results", semantic_results.len());
+                            text_results = semantic_results.into_iter().map(|(s, score)| s).collect();
+                        }
+                    },
+                    Err(e) => println!("  -> Failed to generate query embedding: {}", e),
+                }
+            }
+        }
+        text_results
     };
     
     let response = results.into_iter().map(|s| SearchResult {
@@ -92,7 +123,7 @@ pub async fn search(
         kind: format!("{:?}", s.kind),
         path: s.path,
         line: s.line_start,
-        score: 1.0, 
+        score: 0.0, 
         content: s.content,
     }).collect();
     

@@ -18,11 +18,13 @@ pub mod routes;
 /// Server state
 pub struct AppState {
     pub database_path: PathBuf,
+    pub embedding_engine: Arc<Mutex<Option<crate::query::EmbeddingEngine>>>,
 }
 
 pub async fn start_server(port: u16, database_path: PathBuf) -> anyhow::Result<()> {
     let state = Arc::new(AppState {
         database_path: database_path.clone(),
+        embedding_engine: Arc::new(Mutex::new(None)),
     });
 
     let app = Router::new()

@@ -233,6 +233,8 @@ fn main() -> anyhow::Result<()> {
                     ".git",
                     ".idea",
                     ".vscode",
+                    ".gitignore",
+                    ".DS_Store"
                 ];
                 !ignored.contains(&name.as_ref())
             });
@@ -254,7 +256,7 @@ fn main() -> anyhow::Result<()> {
                 let ext = file_path.extension().and_then(|s| s.to_str()).unwrap_or("").to_lowercase();
                 
                 // Skip common binary files (keep this as a secondary check)
-                let skip_exts = ["png", "jpg", "jpeg", "gif", "ico", "exe", "dll", "so", "o", "a", "lib", "bin", "pdf", "zip", "tar", "gz", "wasm", "node", "db", "sqlite", "lock", "pyc"];
+                let skip_exts = ["png", "jpg", "jpeg", "gif", "ico", "exe", "dll", "so", "o", "a", "lib", "bin", "pdf", "zip", "tar", "gz", "wasm", "node", "db", "sqlite", "lock", "pyc", "svg"];
                 if skip_exts.contains(&ext.as_str()) {
                     continue;
                 }
