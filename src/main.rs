@@ -7,6 +7,7 @@ use coderev::adapter;
 use coderev::query::QueryEngine;
 use coderev::SymbolKind;
 use tracing_subscriber::{fmt, prelude::*, EnvFilter};
+use std::io::Write;
 
 #[derive(Parser)]
 #[command(name = "coderev")]
@@ -419,8 +420,10 @@ fn main() -> anyhow::Result<()> {
                         }
                         store.commit()?;
                         processed += chunk.len();
-                        // print progress...
+                        print!("\r   Progress: {}/{} symbols", processed, symbols_to_embed.len());
+                        std::io::stdout().flush().ok();
                     }
+                    println!(); // New line after progress
                 }
 
                 // Phase 4: Semantic Resolution
@@ -652,8 +655,10 @@ fn ensure_embeddings(store: &mut SqliteStore) -> anyhow::Result<()> {
             store.commit()?;
             
             processed += chunk.len();
-            println!("   Progress: {}/{}", processed, total);
+            print!("\r   Progress: {}/{}", processed, total);
+            std::io::stdout().flush().ok();
         }
+        println!();
         println!("✅ Embedding complete.");
     }
     Ok(())

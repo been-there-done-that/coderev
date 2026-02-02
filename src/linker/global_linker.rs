@@ -184,6 +184,10 @@ impl<'a> GlobalLinker<'a> {
                  }
              } else {
                  external += 1;
+                 // Mark as external so Semantic Resolver skips it
+                 if let Err(e) = self.store.mark_unresolved_as_external(ref_item.id) {
+                     tracing::warn!("Failed to mark reference {} as external: {}", ref_item.id, e);
+                 }
              }
         }
 

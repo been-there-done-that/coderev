@@ -48,7 +48,8 @@ CREATE TABLE IF NOT EXISTS unresolved_references (
     scope_id INTEGER NOT NULL,
     file_path TEXT NOT NULL,
     line INTEGER NOT NULL,
-    ref_kind TEXT NOT NULL DEFAULT 'call'
+    ref_kind TEXT NOT NULL DEFAULT 'call',
+    is_external BOOLEAN NOT NULL DEFAULT 0
 )
 "#;
 

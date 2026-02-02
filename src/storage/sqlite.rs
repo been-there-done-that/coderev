@@ -589,8 +589,8 @@ impl SqliteStore {
     pub fn insert_unresolved(&self, unresolved: &PersistedUnresolvedReference) -> Result<()> {
         self.conn.execute(
             r#"
-            INSERT INTO unresolved_references (from_uri, name, receiver, scope_id, file_path, line, ref_kind)
-            VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)
+            INSERT INTO unresolved_references (from_uri, name, receiver, scope_id, file_path, line, ref_kind, is_external)
+            VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)
             "#,
             params![
                 unresolved.from_uri,
@@ -600,6 +600,7 @@ impl SqliteStore {
                 unresolved.file_path,
                 unresolved.line,
                 unresolved.ref_kind,
+                unresolved.is_external,
             ],
         )?;
         Ok(())
@@ -608,7 +609,7 @@ impl SqliteStore {
     /// Get unresolved references by name
     pub fn get_unresolved_by_name(&self, name: &str) -> Result<Vec<PersistedUnresolvedReference>> {
         let mut stmt = self.conn.prepare(
-            "SELECT id, from_uri, name, receiver, scope_id, file_path, line, ref_kind FROM unresolved_references WHERE name = ?1"
+            "SELECT id, from_uri, name, receiver, scope_id, file_path, line, ref_kind, is_external FROM unresolved_references WHERE name = ?1"
         )?;
         
         let refs = stmt
@@ -622,7 +623,7 @@ impl SqliteStore {
     /// Get all unresolved references
     pub fn get_all_unresolved(&self) -> Result<Vec<PersistedUnresolvedReference>> {
         let mut stmt = self.conn.prepare(
-            "SELECT id, from_uri, name, receiver, scope_id, file_path, line, ref_kind FROM unresolved_references"
+            "SELECT id, from_uri, name, receiver, scope_id, file_path, line, ref_kind, is_external FROM unresolved_references"
         )?;
         
         let refs = stmt
@@ -636,7 +637,7 @@ impl SqliteStore {
     /// Get unresolved references for a specific file
     pub fn get_unresolved_in_file(&self, file_path: &str) -> Result<Vec<PersistedUnresolvedReference>> {
         let mut stmt = self.conn.prepare(
-            "SELECT id, from_uri, name, receiver, scope_id, file_path, line, ref_kind FROM unresolved_references WHERE file_path = ?1"
+            "SELECT id, from_uri, name, receiver, scope_id, file_path, line, ref_kind, is_external FROM unresolved_references WHERE file_path = ?1"
         )?;
         
         let refs = stmt
@@ -665,6 +666,12 @@ impl SqliteStore {
         Ok(count as usize)
     }
 
+    /// Mark an unresolved reference as external
+    pub fn mark_unresolved_as_external(&self, id: i64) -> Result<()> {
+        self.conn.execute("UPDATE unresolved_references SET is_external = 1 WHERE id = ?1", [id])?;
+        Ok(())
+    }
+
     /// Helper to convert a row to PersistedUnresolvedReference
     fn row_to_unresolved(&self, row: &rusqlite::Row) -> rusqlite::Result<PersistedUnresolvedReference> {
         Ok(PersistedUnresolvedReference {
@@ -676,6 +683,7 @@ impl SqliteStore {
             file_path: row.get(5)?,
             line: row.get(6)?,
             ref_kind: row.get(7)?,
+            is_external: row.get(8)?,
         })
     }
 }
@@ -783,6 +791,7 @@ pub struct PersistedUnresolvedReference {
     pub file_path: String,
     pub line: u32,
     pub ref_kind: String,
+    pub is_external: bool,
 }
 
 impl PersistedUnresolvedReference {
@@ -805,6 +814,7 @@ impl PersistedUnresolvedReference {
             file_path,
             line,
             ref_kind: ref_kind.to_string(),
+            is_external: false,
         }
     }
 

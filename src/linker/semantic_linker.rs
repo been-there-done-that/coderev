@@ -3,6 +3,7 @@ use crate::storage::sqlite::{SqliteStore, PersistedUnresolvedReference};
 use crate::query::embedding::EmbeddingEngine;
 use crate::edge::{Edge, EdgeKind};
 use crate::uri::SymbolUri;
+use std::io::Write;
 
 pub struct SemanticLinkerStats {
     pub resolved: usize,
@@ -36,7 +37,17 @@ impl<'a> SemanticLinker<'a> {
         let mut resolved = 0;
         let mut candidates_count = 0;
 
-        for ref_item in unresolved {
+        for (i, ref_item) in unresolved.into_iter().enumerate() {
+            if i % 10 == 0 {
+                print!("\r   Progress: {}/{} references", i + 1, total);
+                std::io::stdout().flush().ok();
+            }
+
+            // Skip external references
+            if ref_item.is_external {
+                continue;
+            }
+            
             // Check if we already have a deterministic edge for this call
             // We can approximate this by checking if any 'Calls' edge exists from this source
             // But we don't know the exact target if it's unresolved.
@@ -121,6 +132,7 @@ impl<'a> SemanticLinker<'a> {
             }
         }
 
+        println!("\r   Progress: {}/{} references", total, total);
         Ok(SemanticLinkerStats { resolved, candidates: candidates_count, total })
     }
     
