@@ -151,6 +151,21 @@ enum Commands {
         #[arg(short, long)]
         verbose: bool,
     },
+
+    /// Serve the Coderev UI and API
+    Serve {
+        /// Path to the database file
+        #[arg(short, long, default_value = "coderev.db")]
+        database: PathBuf,
+
+        /// Port to listen on
+        #[arg(short, long, default_value = "3000")]
+        port: u16,
+
+        /// Host to bind to
+        #[arg(short = 'H', long, default_value = "127.0.0.1")]
+        host: String,
+    },
 }
 
 #[derive(Default)]
@@ -164,7 +179,8 @@ struct IndexingStats {
     chunked: usize,
 }
 
-fn main() -> anyhow::Result<()> {
+#[tokio::main]
+async fn main() -> anyhow::Result<()> {
 
     let cli = Cli::parse();
 
@@ -612,6 +628,21 @@ fn main() -> anyhow::Result<()> {
                     }
                 }
             }
+        }
+
+        Commands::Serve { database, port, host } => {
+            tracing::info!("Starting Coderev server on {}:{}", host, port);
+            
+            let addr = format!("{}:{}", host, port);
+            let socket_addr: std::net::SocketAddr = addr.parse()
+                .map_err(|_| anyhow::anyhow!("Invalid address: {}", addr))?;
+            
+            let store = SqliteStore::open(&database)?;
+            
+            println!("🚀 Coderev Server starting at http://{}", addr);
+            coderev::server::run_server(socket_addr, store).await?;
+            
+            return Ok(());
         }
     }
 
