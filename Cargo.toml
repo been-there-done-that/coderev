@@ -2,5 +2,45 @@
 name = "coderev"
 version = "0.1.0"
 edition = "2024"
+description = "Universal Code Intelligence Substrate - Language-agnostic AST-native semantic code graph"
+license = "MIT"
+
+[[bin]]
+name = "coderev"
+path = "src/main.rs"
+
+[lib]
+name = "coderev"
+path = "src/lib.rs"
 
 [dependencies]
+# Tree-sitter core
+tree-sitter = "0.24"
+
+# Storage
+rusqlite = { version = "0.32", features = ["bundled"] }
+
+# Serialization
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+
+# CLI
+clap = { version = "4.5", features = ["derive"] }
+
+# Error handling
+thiserror = "2.0"
+anyhow = "1.0"
+
+# Logging
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+# Utilities
+walkdir = "2.5"
+
+[dev-dependencies]
+tempfile = "3.14"
+
+[profile.release]
+lto = true
+codegen-units = 1
