@@ -50,6 +50,28 @@ CREATE TABLE IF NOT EXISTS unresolved_references (
 )
 "#;
 
+/// SQL to create the imports table
+pub const CREATE_IMPORTS_TABLE: &str = r#"
+CREATE TABLE IF NOT EXISTS imports (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    file_path TEXT NOT NULL,
+    alias TEXT,
+    target_namespace TEXT NOT NULL,
+    line INTEGER
+)
+"#;
+
+/// SQL to create the ambiguous_references table
+pub const CREATE_AMBIGUOUS_REFERENCES_TABLE: &str = r#"
+CREATE TABLE IF NOT EXISTS ambiguous_references (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    reference_id INTEGER NOT NULL,
+    candidate_uri TEXT NOT NULL,
+    score REAL DEFAULT 0.0,
+    FOREIGN KEY(reference_id) REFERENCES unresolved_references(id)
+)
+"#;
+
 /// SQL to create indexes
 pub const CREATE_INDEXES: &[&str] = &[
     "CREATE INDEX IF NOT EXISTS idx_symbols_path ON symbols(path)",
@@ -60,6 +82,8 @@ pub const CREATE_INDEXES: &[&str] = &[
     "CREATE INDEX IF NOT EXISTS idx_edges_kind ON edges(kind)",
     "CREATE INDEX IF NOT EXISTS idx_unresolved_name ON unresolved_references(name)",
     "CREATE INDEX IF NOT EXISTS idx_unresolved_file ON unresolved_references(file_path)",
+    "CREATE INDEX IF NOT EXISTS idx_imports_file ON imports(file_path)",
+    "CREATE INDEX IF NOT EXISTS idx_ambiguous_ref ON ambiguous_references(reference_id)",
 ];
 
 /// All schema creation statements
@@ -69,6 +93,8 @@ pub fn all_schema_statements() -> Vec<&'static str> {
         CREATE_EDGES_TABLE,
         CREATE_EMBEDDINGS_TABLE,
         CREATE_UNRESOLVED_REFERENCES_TABLE,
+        CREATE_IMPORTS_TABLE,
+        CREATE_AMBIGUOUS_REFERENCES_TABLE,
     ];
     stmts.extend(CREATE_INDEXES.iter().copied());
     stmts

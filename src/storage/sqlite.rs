@@ -431,8 +431,104 @@ impl SqliteStore {
             edges: self.count_edges()?,
             embeddings: self.count_embeddings()?,
             unresolved: self.count_unresolved()?,
+            imports: self.count_imports()?,
         })
     }
+
+    // ========== Import Operations ==========
+
+    /// Insert an import
+    pub fn insert_import(&self, file_path: &str, alias: Option<&str>, target_namespace: &str, line: Option<u32>) -> Result<()> {
+        self.conn.execute(
+            "INSERT INTO imports (file_path, alias, target_namespace, line) VALUES (?1, ?2, ?3, ?4)",
+            params![file_path, alias, target_namespace, line],
+        )?;
+        Ok(())
+    }
+
+    /// Get imports for a file
+    pub fn get_imports_for_file(&self, file_path: &str) -> Result<Vec<Import>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT id, file_path, alias, target_namespace, line FROM imports WHERE file_path = ?1"
+        )?;
+        
+        let imports = stmt
+            .query_map([file_path], |row| {
+                Ok(Import {
+                    id: row.get(0)?,
+                    file_path: row.get(1)?,
+                    alias: row.get(2)?,
+                    target_namespace: row.get(3)?,
+                    line: row.get(4)?,
+                })
+            })?
+            .filter_map(|r| r.ok())
+            .collect();
+        
+        Ok(imports)
+    }
+
+    /// Clear all imports
+    pub fn clear_imports(&self) -> Result<()> {
+        self.conn.execute("DELETE FROM imports", [])?;
+        Ok(())
+    }
+
+    /// Count imports
+    pub fn count_imports(&self) -> Result<usize> {
+        let count: i64 = self.conn.query_row("SELECT COUNT(*) FROM imports", [], |row| row.get(0))?;
+        Ok(count as usize)
+    }
+
+    // ========== Ambiguous Reference Operations ==========
+
+    /// Insert an ambiguous reference candidate
+    pub fn insert_ambiguous_reference(&self, reference_id: i64, candidate_uri: &str, score: f32) -> Result<()> {
+        self.conn.execute(
+            "INSERT INTO ambiguous_references (reference_id, candidate_uri, score) VALUES (?1, ?2, ?3)",
+            params![reference_id, candidate_uri, score],
+        )?;
+        Ok(())
+    }
+
+    /// Clear all ambiguous references
+    pub fn clear_ambiguous_references(&self) -> Result<()> {
+        self.conn.execute("DELETE FROM ambiguous_references", [])?;
+        Ok(())
+    }
+
+    // ========== Advanced Symbol Lookups for Linker ==========
+
+    /// Find symbols by name within a specific file (Local Resolution)
+    pub fn find_symbols_by_name_and_file(&self, name: &str, file_path: &str) -> Result<Vec<Symbol>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT uri, kind, name, path, line_start, line_end, doc, signature, content FROM symbols WHERE name = ?1 AND path = ?2"
+        )?;
+        
+        let symbols = stmt
+            .query_map([name, file_path], |row| self.row_to_symbol(row))?
+            .filter_map(|r| r.ok())
+            .collect();
+        
+        Ok(symbols)
+    }
+
+    /// Find symbols by name where the URI suggests it belongs to a namespace (Import Resolution)
+    /// This uses LIKE query on URI: codescope://%/{target_namespace}%
+    pub fn find_symbols_by_name_and_container_pattern(&self, name: &str, namespace_pattern: &str) -> Result<Vec<Symbol>> {
+        let pattern = format!("%/{}%", namespace_pattern);
+        let mut stmt = self.conn.prepare(
+            "SELECT uri, kind, name, path, line_start, line_end, doc, signature, content FROM symbols WHERE name = ?1 AND uri LIKE ?2"
+        )?;
+        
+        let symbols = stmt
+            .query_map([name, &pattern], |row| self.row_to_symbol(row))?
+            .filter_map(|r| r.ok())
+            .collect();
+        
+        Ok(symbols)
+    }
+
 
     // ========== Unresolved Reference Operations ==========
 
@@ -578,6 +674,26 @@ impl PersistedUnresolvedReference {
     }
 }
 
+/// Import record
+#[derive(Debug, Clone)]
+pub struct Import {
+    pub id: i64,
+    pub file_path: String,
+    pub alias: Option<String>,
+    pub target_namespace: String,
+    pub line: Option<u32>,
+}
+
+/// Ambiguous reference record
+#[derive(Debug, Clone)]
+pub struct AmbiguousReference {
+    pub id: i64,
+    pub reference_id: i64,
+    pub candidate_uri: String,
+    pub score: f32,
+}
+
+
 /// Database statistics
 #[derive(Debug, Clone)]
 pub struct DbStats {
@@ -585,7 +701,9 @@ pub struct DbStats {
     pub edges: usize,
     pub embeddings: usize,
     pub unresolved: usize,
+    pub imports: usize,
 }
+
 
 impl std::fmt::Display for DbStats {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -593,8 +711,10 @@ impl std::fmt::Display for DbStats {
         writeln!(f, "  Symbols: {}", self.symbols)?;
         writeln!(f, "  Edges: {}", self.edges)?;
         writeln!(f, "  Embeddings: {}", self.embeddings)?;
-        writeln!(f, "  Unresolved: {}", self.unresolved)
+        writeln!(f, "  Unresolved: {}", self.unresolved)?;
+        writeln!(f, "  Imports: {}", self.imports)
     }
+
 }
 
 #[cfg(test)]

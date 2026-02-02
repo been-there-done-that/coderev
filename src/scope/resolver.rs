@@ -178,7 +178,9 @@ mod tests {
             namespace: "os".to_string(),
             symbols: vec!["path".to_string()],
             alias: None,
+            line: 0,
         });
+
 
         let mut external = HashMap::new();
         external.insert("os.path".to_string(), vec![sample_uri("path")]);

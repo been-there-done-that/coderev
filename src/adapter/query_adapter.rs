@@ -277,14 +277,17 @@ impl QueryAdapter {
             if let Some(module_node) = captures.get("import.module") {
                 let module = module_node.utf8_text(source_bytes).unwrap_or("").to_string();
                 
+                let line = module_node.start_position().row as u32 + 1;
                 result.scope_graph.add_import(
                     ScopeId(0),
                     Import {
                         namespace: module,
                         symbols: vec![],
                         alias: None,
+                        line,
                     },
                 );
+
             }
             
             if let Some(module_node) = captures.get("import.from_module") {
@@ -296,14 +299,17 @@ impl QueryAdapter {
                 
                 let import_symbols = name.map(|n| vec![n]).unwrap_or_default();
                 
+                let line = module_node.start_position().row as u32 + 1;
                 result.scope_graph.add_import(
                     ScopeId(0),
                     Import {
                         namespace: from_module,
                         symbols: import_symbols,
                         alias,
+                        line,
                     },
                 );
+
             }
         }
 

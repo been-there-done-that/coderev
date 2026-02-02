@@ -17,6 +17,8 @@ pub mod scope;
 pub mod storage;
 pub mod adapter;
 pub mod query;
+pub mod linker;
+
 
 // Re-exports for convenient access
 pub use uri::SymbolUri;

@@ -42,6 +42,8 @@ pub struct Import {
     pub symbols: Vec<String>,
     /// Alias for the import (e.g., `import foo as bar`)
     pub alias: Option<String>,
+    /// Line number of the import
+    pub line: u32,
 }
 
 /// A reference to a name that needs resolution

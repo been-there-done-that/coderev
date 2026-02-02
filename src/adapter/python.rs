@@ -199,6 +199,7 @@ impl PythonAdapter {
                                 namespace: name.to_string(),
                                 symbols: vec![],
                                 alias: None,
+                                line: 0,
                             });
                         }
                     }
@@ -225,7 +226,9 @@ impl PythonAdapter {
                     namespace: module.to_string(),
                     symbols,
                     alias: None,
+                    line: 0,
                 });
+
             }
             _ => {}
         }

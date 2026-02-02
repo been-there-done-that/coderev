@@ -188,8 +188,11 @@ fn main() -> anyhow::Result<()> {
             println!("📂 Path: {:?}", path);
             println!("🗄️  Database: {:?}", database);
             
-            // Clear old unresolved references before re-indexing
+            // Clear old unresolved references and imports before re-indexing
             store.clear_unresolved()?;
+            store.clear_imports()?;
+            store.clear_ambiguous_references()?;
+
 
             for entry in walkdir::WalkDir::new(&path)
                 .into_iter()
@@ -227,10 +230,17 @@ fn main() -> anyhow::Result<()> {
                                     
                                     // Phase 2: Persist unresolved references to DB
                                     for unresolved in res.scope_graph.unresolved_references() {
+                                        let (receiver, name) = if let Some((r, n)) = unresolved.name.rsplit_once('.') {
+                                            (Some(r.to_string()), n.to_string())
+                                        } else {
+                                            (None, unresolved.name.clone())
+                                        };
+
                                         let persisted = coderev::storage::PersistedUnresolvedReference::new(
                                             unresolved.from_uri.to_uri_string(),
-                                            unresolved.name.clone(),
-                                            None, // receiver - extracted from name if needed
+                                            name,
+                                            receiver,
+
                                             unresolved.scope.0 as i64,
                                             relative_path_str.to_string(),
                                             unresolved.line,
@@ -239,6 +249,17 @@ fn main() -> anyhow::Result<()> {
                                         store.insert_unresolved(&persisted)?;
                                         total_unresolved += 1;
                                     }
+
+                                    // Phase 1: Store imports
+                                    for import in res.scope_graph.imports(coderev::scope::graph::ScopeId::root()) {
+                                        store.insert_import(
+                                            relative_path_str,
+                                            import.alias.as_deref(),
+                                            &import.namespace,
+                                            Some(import.line),
+                                        )?;
+                                    }
+
                                     
                                     total_symbols += res.symbols.len();
                                     total_files += 1;
@@ -290,12 +311,13 @@ fn main() -> anyhow::Result<()> {
             // Phase 2: Run Global Linker (Semantic)
             if total_unresolved > 0 {
                 println!("\n🔗 Phase 2: Running Global Linker (Semantic)...");
-                let resolver = coderev::query::SemanticResolver::new(&store)?;
-                let stats = resolver.resolve_all_semantic()?;
+                let linker = coderev::linker::GlobalLinker::new(&store);
+                let stats = linker.run()?;
                 println!("{}", stats);
             } else {
                 println!("\n✅ Phase 2: No unresolved references to resolve.");
             }
+
 
             // Phase 3: Generate Semantic Embeddings
             println!("\n🧠 Phase 3: Generating Semantic Embeddings...");
@@ -475,10 +497,11 @@ fn main() -> anyhow::Result<()> {
                 println!();
             }
             
-            let resolver = coderev::query::SemanticResolver::new(&store)?;
-            let stats = resolver.resolve_all_semantic()?;
+            let linker = coderev::linker::GlobalLinker::new(&store);
+            let stats = linker.run()?;
             
             println!("{}", stats);
+
             
             // Show remaining unresolved if verbose
             if verbose {
@@ -532,9 +555,10 @@ fn ensure_resolved(store: &SqliteStore) -> anyhow::Result<()> {
     let unresolved_count = store.count_unresolved()?;
     if unresolved_count > 0 {
         println!("🔗 On-demand: Resolving {} references...", unresolved_count);
-        let resolver = coderev::query::SemanticResolver::new(store)?;
-        let stats = resolver.resolve_all_semantic()?;
+        let linker = coderev::linker::GlobalLinker::new(store);
+        let stats = linker.run()?;
         println!("{}", stats);
     }
+
     Ok(())
 }
