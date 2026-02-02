@@ -218,15 +218,17 @@ impl SqliteStore {
     pub fn insert_edge(&self, edge: &Edge) -> Result<()> {
         self.conn.execute(
             r#"
-            INSERT OR REPLACE INTO edges (from_uri, to_uri, kind, confidence)
-            VALUES (?1, ?2, ?3, ?4)
+            INSERT OR REPLACE INTO edges (from_uri, to_uri, kind, confidence, resolution_mode)
+            VALUES (?1, ?2, ?3, ?4, ?5)
             "#,
             params![
                 edge.from_uri.to_uri_string(),
                 edge.to_uri.to_uri_string(),
                 edge.kind.as_str(),
                 edge.confidence,
+                edge.resolution_mode,
             ],
+
         )?;
         Ok(())
     }
@@ -235,7 +237,8 @@ impl SqliteStore {
     pub fn get_edges_from(&self, uri: &SymbolUri) -> Result<Vec<Edge>> {
         let uri_str = uri.to_uri_string();
         let mut stmt = self.conn.prepare(
-            "SELECT from_uri, to_uri, kind, confidence FROM edges WHERE from_uri = ?1"
+            "SELECT from_uri, to_uri, kind, confidence, resolution_mode FROM edges WHERE from_uri = ?1"
+
         )?;
         
         let edges = stmt
@@ -250,7 +253,8 @@ impl SqliteStore {
     pub fn get_edges_to(&self, uri: &SymbolUri) -> Result<Vec<Edge>> {
         let uri_str = uri.to_uri_string();
         let mut stmt = self.conn.prepare(
-            "SELECT from_uri, to_uri, kind, confidence FROM edges WHERE to_uri = ?1"
+            "SELECT from_uri, to_uri, kind, confidence, resolution_mode FROM edges WHERE to_uri = ?1"
+
         )?;
         
         let edges = stmt
@@ -264,7 +268,8 @@ impl SqliteStore {
     /// Get edges by kind
     pub fn get_edges_by_kind(&self, kind: EdgeKind) -> Result<Vec<Edge>> {
         let mut stmt = self.conn.prepare(
-            "SELECT from_uri, to_uri, kind, confidence FROM edges WHERE kind = ?1"
+            "SELECT from_uri, to_uri, kind, confidence, resolution_mode FROM edges WHERE kind = ?1"
+
         )?;
         
         let edges = stmt
@@ -287,6 +292,7 @@ impl SqliteStore {
         let to_str: String = row.get(1)?;
         let kind_str: String = row.get(2)?;
         let confidence: f32 = row.get(3)?;
+        let resolution_mode: String = row.get(4)?;
 
         let from_uri = SymbolUri::parse(&from_str).map_err(|e| {
             rusqlite::Error::FromSqlConversionFailure(0, rusqlite::types::Type::Text, Box::new(e))
@@ -300,8 +306,11 @@ impl SqliteStore {
             rusqlite::Error::FromSqlConversionFailure(2, rusqlite::types::Type::Text, Box::new(e))
         })?;
 
-        Ok(Edge::with_confidence(from_uri, to_uri, kind, confidence))
+        let mut edge = Edge::with_confidence(from_uri, to_uri, kind, confidence);
+        edge.resolution_mode = resolution_mode;
+        Ok(edge)
     }
+
 
     // ========== Embedding Operations ==========
 
@@ -335,6 +344,31 @@ impl SqliteStore {
                 .collect()
         }))
     }
+
+    /// Insert a callsite embedding
+    pub fn insert_callsite_embedding(&self, reference_id: i64, vector: &[f32]) -> Result<()> {
+        let blob: Vec<u8> = vector.iter().flat_map(|f| f.to_le_bytes()).collect();
+        
+        self.conn.execute(
+            "INSERT OR REPLACE INTO callsite_embeddings (reference_id, vector) VALUES (?1, ?2)",
+            params![reference_id, blob],
+        )?;
+        Ok(())
+    }
+
+    /// Count callsite embeddings
+    pub fn count_callsite_embeddings(&self) -> Result<usize> {
+        let count: i64 = self.conn.query_row("SELECT COUNT(*) FROM callsite_embeddings", [], |row| row.get(0))?;
+        Ok(count as usize)
+    }
+
+    /// Clear callsite embeddings
+    pub fn clear_callsite_embeddings(&self) -> Result<()> {
+        self.conn.execute("DELETE FROM callsite_embeddings", [])?;
+        Ok(())
+    }
+
+
 
     /// Count embeddings
     pub fn count_embeddings(&self) -> Result<usize> {
@@ -432,7 +466,9 @@ impl SqliteStore {
             embeddings: self.count_embeddings()?,
             unresolved: self.count_unresolved()?,
             imports: self.count_imports()?,
+            callsite_embeddings: self.count_callsite_embeddings()?,
         })
+
     }
 
     // ========== Import Operations ==========
@@ -702,7 +738,9 @@ pub struct DbStats {
     pub embeddings: usize,
     pub unresolved: usize,
     pub imports: usize,
+    pub callsite_embeddings: usize,
 }
+
 
 
 impl std::fmt::Display for DbStats {
@@ -712,7 +750,9 @@ impl std::fmt::Display for DbStats {
         writeln!(f, "  Edges: {}", self.edges)?;
         writeln!(f, "  Embeddings: {}", self.embeddings)?;
         writeln!(f, "  Unresolved: {}", self.unresolved)?;
-        writeln!(f, "  Imports: {}", self.imports)
+        writeln!(f, "  Imports: {}", self.imports)?;
+        writeln!(f, "  Callsite Embeddings: {}", self.callsite_embeddings)
+
     }
 
 }

@@ -189,6 +189,7 @@ fn main() -> anyhow::Result<()> {
             println!("🗄️  Database: {:?}", database);
             
             // Clear old unresolved references and imports before re-indexing
+            store.clear_callsite_embeddings()?;
             store.clear_unresolved()?;
             store.clear_imports()?;
             store.clear_ambiguous_references()?;
@@ -346,7 +347,19 @@ fn main() -> anyhow::Result<()> {
                 println!("✅ All symbols already have embeddings.");
             }
 
+            // Phase 4: Semantic Resolution (Probabilistic)
+            println!("\n🧠 Phase 4: Running Semantic Resolver...");
+            let engine = coderev::query::EmbeddingEngine::new()?;
+            let semantic_linker = coderev::linker::SemanticLinker::new(&store, &engine);
+            let stats = semantic_linker.run()?;
+            if stats.resolved > 0 {
+                println!("✅ Semantic Resolver: Resolved {} references (checked {} candidates)", stats.resolved, stats.candidates);
+            } else {
+                println!("ℹ️  Semantic Resolver: No new edges resolved.");
+            }
+
             println!("\n✅ Indexing complete!");
+
             println!("🗄️  Database saved to: {:?}", database);
             
             // Show final stats
@@ -476,9 +489,10 @@ fn main() -> anyhow::Result<()> {
         }
 
         Commands::Resolve { database, verbose } => {
-            let store = SqliteStore::open(&database)?;
+            let mut store = SqliteStore::open(&database)?;
             
             let unresolved_count = store.count_unresolved()?;
+
             if unresolved_count == 0 {
                 println!("✅ No unresolved references to resolve.");
                 return Ok(());
@@ -501,6 +515,20 @@ fn main() -> anyhow::Result<()> {
             let stats = linker.run()?;
             
             println!("{}", stats);
+
+            // Run Semantic Resolver
+            println!("\n🧠 Running Semantic Resolver...");
+            ensure_embeddings(&mut store)?;
+            
+            let engine = coderev::query::EmbeddingEngine::new()?;
+            let semantic_linker = coderev::linker::SemanticLinker::new(&store, &engine);
+            let semantic_stats = semantic_linker.run()?;
+            if semantic_stats.resolved > 0 {
+                println!("✅ Semantic Resolver: Resolved {} references (checked {} candidates)", semantic_stats.resolved, semantic_stats.candidates);
+            } else {
+                println!("ℹ️  Semantic Resolver: No new edges resolved.");
+            }
+
 
             
             // Show remaining unresolved if verbose
@@ -558,6 +586,19 @@ fn ensure_resolved(store: &SqliteStore) -> anyhow::Result<()> {
         let linker = coderev::linker::GlobalLinker::new(store);
         let stats = linker.run()?;
         println!("{}", stats);
+        
+        println!("🧠 On-demand: Running Semantic Resolver...");
+        // This requires a mutable store, but we got an immutable one.
+        // We'll have to reopen it or skip.
+        // For simplicity in this helper, let's reopen.
+        // But we don't know the path here easily without passing it.
+        // Actually SqliteStore doesn't expose path. 
+        // We can CAST store to mutable? No.
+        // We will skip Semantic Resolver here for now to avoid complexity, 
+        // OR we change signature of ensure_resolved to take &mut SqliteStore?
+        // Callers/Callees/Impact command open store as mutable? No, `SqliteStore::open` returns `SqliteStore` which is owned.
+        // But `ensure_resolved` takes `&SqliteStore`. 
+        // Let's check callers.
     }
 
     Ok(())

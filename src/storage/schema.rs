@@ -23,9 +23,11 @@ CREATE TABLE IF NOT EXISTS edges (
     to_uri TEXT NOT NULL,
     kind TEXT NOT NULL,
     confidence REAL NOT NULL DEFAULT 1.0,
+    resolution_mode TEXT NOT NULL DEFAULT 'static',
     UNIQUE(from_uri, to_uri, kind)
 )
 "#;
+
 
 /// SQL to create the embeddings table
 pub const CREATE_EMBEDDINGS_TABLE: &str = r#"
@@ -72,6 +74,17 @@ CREATE TABLE IF NOT EXISTS ambiguous_references (
 )
 "#;
 
+/// SQL to create the callsite_embeddings table
+pub const CREATE_CALLSITE_EMBEDDINGS_TABLE: &str = r#"
+CREATE TABLE IF NOT EXISTS callsite_embeddings (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    reference_id INTEGER NOT NULL,
+    vector BLOB NOT NULL,
+    FOREIGN KEY(reference_id) REFERENCES unresolved_references(id)
+)
+"#;
+
+
 /// SQL to create indexes
 pub const CREATE_INDEXES: &[&str] = &[
     "CREATE INDEX IF NOT EXISTS idx_symbols_path ON symbols(path)",
@@ -95,7 +108,10 @@ pub fn all_schema_statements() -> Vec<&'static str> {
         CREATE_UNRESOLVED_REFERENCES_TABLE,
         CREATE_IMPORTS_TABLE,
         CREATE_AMBIGUOUS_REFERENCES_TABLE,
+        CREATE_CALLSITE_EMBEDDINGS_TABLE,
     ];
+
+
     stmts.extend(CREATE_INDEXES.iter().copied());
     stmts
 }

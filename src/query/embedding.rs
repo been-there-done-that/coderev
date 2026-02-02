@@ -55,4 +55,18 @@ impl EmbeddingEngine {
         
         Ok(embeddings.remove(0))
     }
+
+    /// Generate embedding for a call site
+    pub fn embed_call_site(&self, caller_name: &str, context: &str, imports: &[String]) -> Result<Vec<f32>> {
+        let mut text = format!("Caller: {}\n", caller_name);
+        if !context.is_empty() {
+             text.push_str(&format!("Context: {}\n", context));
+        }
+        if !imports.is_empty() {
+            text.push_str(&format!("Imports: {}\n", imports.join(", ")));
+        }
+        
+        self.embed_query(&text)
+    }
 }
+

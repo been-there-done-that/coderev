@@ -242,20 +242,21 @@ impl QueryAdapter {
                     .map(|n| n.utf8_text(source_bytes).unwrap_or("").to_string());
 
                 // Create unresolved reference
-                if let Some((_, ref caller_uri)) = current_function {
-                    let full_name = if let Some(ref recv) = receiver {
-                        format!("{}.{}", recv, call_name)
-                    } else {
-                        call_name.clone()
-                    };
-                    
-                    result.scope_graph.add_reference(UnresolvedReference {
-                        scope: ScopeId(0),
-                        name: full_name,
-                        line: call_line,
-                        from_uri: caller_uri.clone(),
-                    });
-                }
+                // Use current function or fallback to module namespace
+                let caller_uri = current_function.as_ref().map(|(_, uri)| uri).unwrap_or(&namespace_uri);
+
+                let full_name = if let Some(ref recv) = receiver {
+                    format!("{}.{}", recv, call_name)
+                } else {
+                    call_name.clone()
+                };
+                
+                result.scope_graph.add_reference(UnresolvedReference {
+                    scope: ScopeId(0),
+                    name: full_name,
+                    line: call_line,
+                    from_uri: caller_uri.clone(),
+                });
             }
 
             // Process inheritance

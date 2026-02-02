@@ -110,6 +110,8 @@ pub struct Edge {
     pub kind: EdgeKind,
     /// Confidence score (1.0 = deterministic, <1.0 = probabilistic)
     pub confidence: f32,
+    /// Mode of resolution (static | semantic)
+    pub resolution_mode: String,
 }
 
 impl Edge {
@@ -120,6 +122,7 @@ impl Edge {
             to_uri,
             kind,
             confidence: 1.0,
+            resolution_mode: "static".to_string(),
         }
     }
 
@@ -130,8 +133,10 @@ impl Edge {
             to_uri,
             kind,
             confidence: confidence.clamp(0.0, 1.0),
+            resolution_mode: "semantic".to_string(),
         }
     }
+
 
     /// Check if this is a deterministic edge
     pub fn is_deterministic(&self) -> bool {
@@ -150,7 +155,9 @@ impl Edge {
             to_uri: self.from_uri.clone(),
             kind: self.kind,
             confidence: self.confidence,
+            resolution_mode: self.resolution_mode.clone(),
         }
+
     }
 }
 
