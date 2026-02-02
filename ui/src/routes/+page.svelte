@@ -13,13 +13,46 @@
 
 	let searchQuery = $state('');
 
+	// Virtual List State
+	let sidebarContainer = $state<HTMLElement | null>(null);
+	let scrollTop = $state(0);
+	let containerHeight = $state(800);
+	const itemHeight = 44;
+	const overscan = 20;
+
+	let totalHeight = $derived(graphState.results.length * itemHeight);
+	let startIdx = $derived(Math.max(0, Math.floor(scrollTop / itemHeight) - overscan));
+	let endIdx = $derived(
+		Math.min(
+			graphState.results.length,
+			Math.ceil((scrollTop + containerHeight) / itemHeight) + overscan
+		)
+	);
+	let visibleResults = $derived(graphState.results.slice(startIdx, endIdx));
+
+	function handleScroll(e: Event) {
+		scrollTop = (e.currentTarget as HTMLElement).scrollTop;
+	}
+
 	async function handleSearch(e: Event) {
 		e.preventDefault();
 		await graphState.search(searchQuery);
+		scrollTop = 0;
+		if (sidebarContainer) sidebarContainer.scrollTop = 0;
 	}
 
 	onMount(() => {
-		// Initial stats or discovery feed fetch
+		graphState.search('');
+		if (sidebarContainer) {
+			containerHeight = sidebarContainer.clientHeight;
+		}
+		const ro = new ResizeObserver(() => {
+			if (sidebarContainer) {
+				containerHeight = sidebarContainer.clientHeight;
+			}
+		});
+		if (sidebarContainer) ro.observe(sidebarContainer);
+		return () => ro.disconnect();
 	});
 </script>
 
@@ -60,39 +93,43 @@
 	<main class="flex h-full w-full pt-20">
 		<!-- Sidebar / Results -->
 		<aside class="glass-dark z-10 flex h-full w-80 flex-col border-r border-white/5 p-4">
-			<div class="mb-6 flex items-center justify-between">
+			<div class="mb-6 flex shrink-0 items-center justify-between">
 				<h2 class="text-sm font-semibold tracking-wider text-text-secondary uppercase">Results</h2>
 				<span class="rounded-full bg-brand-primary/10 px-2 py-0.5 text-[10px] text-brand-primary">
 					{graphState.results.length} found
 				</span>
 			</div>
 
-			<div class="flex-1 space-y-2 overflow-y-auto pr-2">
-				{#each graphState.results as result}
-					<button
-						onclick={() => graphState.selectSymbol(result)}
-						class="group flex w-full flex-col items-start rounded-xl p-3 text-left transition-all hover:bg-white/5 {graphState
-							.selectedSymbol?.uri === result.uri
-							? 'border border-white/10 bg-white/10'
-							: 'border border-transparent'}"
-					>
-						<div class="mb-1 flex w-full items-center justify-between">
-							<span class="font-mono text-xs text-brand-primary uppercase">{result.kind}</span>
-							<ChevronRightIcon
-								class="h-3 w-3 opacity-0 transition-opacity group-hover:opacity-100"
-							/>
-						</div>
-						<span class="truncate font-medium">{result.name}</span>
-						<span class="truncate text-xs text-text-secondary"
-							>{result.path}:{result.line_start}</span
+			<div
+				bind:this={sidebarContainer}
+				class="relative flex-1 overflow-y-auto pr-2"
+				onscroll={handleScroll}
+			>
+				<div style="height: {totalHeight}px; width: 100%; position: relative;">
+					{#each visibleResults as result, i (result.uri)}
+						<button
+							style="position: absolute; top: {(startIdx + i) *
+								itemHeight}px; height: {itemHeight}px; width: 100%;"
+							onclick={() => graphState.selectSymbol(result)}
+							class="group flex items-center rounded-xl px-3 text-left transition-all hover:bg-white/5 {graphState
+								.selectedSymbol?.uri === result.uri
+								? 'border border-white/10 bg-white/10'
+								: 'border border-transparent'}"
 						>
-					</button>
-				{:else}
-					<div class="flex h-40 flex-col items-center justify-center text-center opacity-40">
-						<FileCodeIcon class="mb-3 h-10 w-10 text-text-secondary" />
-						<p class="text-sm italic">Search to explore the code graph</p>
-					</div>
-				{/each}
+							<span class="truncate text-sm font-medium text-text-primary/90">{result.name}</span>
+							<ChevronRightIcon
+								class="ml-auto h-3 w-3 shrink-0 opacity-0 transition-opacity group-hover:opacity-100"
+							/>
+						</button>
+					{:else}
+						{#if !graphState.isLoading}
+							<div class="flex h-40 flex-col items-center justify-center text-center opacity-40">
+								<FileCodeIcon class="mb-3 h-10 w-10 text-text-secondary" />
+								<p class="text-sm italic">Search to explore the code graph</p>
+							</div>
+						{/if}
+					{/each}
+				</div>
 			</div>
 		</aside>
 

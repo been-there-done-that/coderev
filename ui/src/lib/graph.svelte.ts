@@ -38,7 +38,6 @@ function createGraphState() {
         set selectedSymbol(s) { state.selectedSymbol = s; state.impact = []; },
 
         async search(query: string) {
-            if (!query) return;
             state.isLoading = true;
             state.error = null;
             state.query = query;
@@ -47,7 +46,7 @@ function createGraphState() {
                 const id = crypto.randomUUID();
                 state.requestId = id;
 
-                const response = await fetch(`http://127.0.0.1:3000/api/v1/search?query=${encodeURIComponent(query)}&limit=20`, {
+                const response = await fetch(`http://127.0.0.1:3000/api/v1/search?query=${encodeURIComponent(query)}&limit=1000`, {
                     headers: { 'X-Request-ID': id }
                 });
 
