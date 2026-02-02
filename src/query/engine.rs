@@ -67,6 +67,18 @@ impl<'a> QueryEngine<'a> {
         Ok(results)
     }
 
+    /// Search for symbols by vector similarity
+    pub fn search_by_vector(&self, vector: &[f32], limit: usize) -> Result<Vec<QueryResult>> {
+        let results = self.store.search_by_vector(vector, limit)?;
+        
+        let query_results = results
+            .into_iter()
+            .map(|(symbol, score)| QueryResult::new(symbol, score))
+            .collect();
+            
+        Ok(query_results)
+    }
+
     /// Search for symbols by kind and optional name pattern
     pub fn search_by_kind(&self, kind: SymbolKind, name_pattern: Option<&str>, limit: usize) -> Result<Vec<Symbol>> {
         let all_of_kind = self.store.find_symbols_by_kind(kind)?;

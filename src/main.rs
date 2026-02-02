@@ -64,9 +64,24 @@ enum Commands {
         #[arg(short, long, default_value = "10")]
         limit: usize,
 
-        /// Filter by symbol kind (namespace, container, callable, value)
+        /// Filter by symbol kind
         #[arg(short, long)]
         kind: Option<String>,
+
+        /// Use vector search (requires embeddings)
+        #[arg(short = 'V', long)]
+        vector: bool,
+    },
+
+    /// Generate embeddings for symbols
+    Embed {
+        /// Path to the database file
+        #[arg(short, long, default_value = "coderev.db")]
+        database: PathBuf,
+
+        /// Model name (placeholder for now)
+        #[arg(short, long, default_value = "all-MiniLM-L6-v2")]
+        model: String,
     },
 
     /// Find all callers of a symbol
@@ -155,6 +170,7 @@ fn main() -> anyhow::Result<()> {
             let registry = adapter::default_registry();
             let mut total_symbols = 0;
             let mut total_files = 0;
+            let mut unresolved_refs = Vec::new();
 
             println!("🚀 Indexing repository: {}", repo_name);
             println!("📂 Path: {:?}", path);
@@ -182,15 +198,47 @@ fn main() -> anyhow::Result<()> {
                                     for edge in &res.edges {
                                         store.insert_edge(edge)?;
                                     }
+                                    
+                                    // Collect unresolved references for the second pass
+                                    for unresolved in res.scope_graph.unresolved_references() {
+                                        unresolved_refs.push(unresolved.clone());
+                                    }
+                                    
                                     total_symbols += res.symbols.len();
                                     total_files += 1;
                                 }
-                                Err(e) => eprintln!("⚠️ Error parsing {:?}: {}", file_path, e),
+                                Err(e) => {
+                                    tracing::error!("Failed to parse {}: {}", file_path.display(), e);
+                                }
                             }
                         }
-                        Err(e) => eprintln!("⚠️ Error reading {:?}: {}", file_path, e),
+                        Err(e) => {
+                            tracing::error!("Failed to read {}: {}", file_path.display(), e);
+                        }
                     }
                 }
+            }
+            
+            // Phase 7: Multi-pass Resolution
+            if !unresolved_refs.is_empty() {
+                println!("🔗 Resolving {} cross-references...", unresolved_refs.len());
+                let mut resolved_count = 0;
+                
+                for unresolved in unresolved_refs {
+                    // Try to find the symbol in the database
+                    // For now, we do a simple name-based lookup
+                    let matches = store.find_symbols_by_name(&unresolved.name)?;
+                    if let Some(target) = matches.first() {
+                        let edge = coderev::edge::Edge::new(
+                            unresolved.from_uri.clone(),
+                            target.uri.clone(),
+                            coderev::edge::EdgeKind::Calls,
+                        );
+                        store.insert_edge(&edge)?;
+                        resolved_count += 1;
+                    }
+                }
+                println!("✅ Resolved {} references.", resolved_count);
             }
 
             println!("\n✅ Indexing complete!");
@@ -199,26 +247,32 @@ fn main() -> anyhow::Result<()> {
             println!("🗄️  Database saved to: {:?}", database);
         }
 
-        Commands::Search { query, database, limit, kind } => {
+        Commands::Search { query, database, limit, kind, vector } => {
             let store = SqliteStore::open(&database)?;
             let engine = QueryEngine::new(&store);
             
-            println!("🔍 Searching for: '{}' (kind: {:?}, limit: {})...", query, kind, limit);
-            
-            let parsed_kind = if let Some(k) = kind {
+            let parsed_kind = if let Some(ref k) = kind {
                 use std::str::FromStr;
-                Some(SymbolKind::from_str(&k)?)
+                Some(SymbolKind::from_str(k)?)
             } else {
                 None
             };
 
-            let results = if let Some(k) = parsed_kind {
-                engine.search_by_kind(k, Some(&query), limit)?
-                    .into_iter()
-                    .map(|s| coderev::query::engine::QueryResult::new(s, 1.0))
-                    .collect()
+            let results = if vector {
+                println!("🧠 [Local Embedding] Searching for: '{}'...", query);
+                let embedding_engine = coderev::query::EmbeddingEngine::new()?;
+                let query_vector = embedding_engine.embed_query(&query)?;
+                engine.search_by_vector(&query_vector, limit)?
             } else {
-                engine.search_by_name(&query, limit)?
+                println!("🔍 Searching for: '{}' (kind: {:?}, limit: {})...", query, kind, limit);
+                if let Some(k) = parsed_kind {
+                    engine.search_by_kind(k, Some(&query), limit)?
+                        .into_iter()
+                        .map(|s| coderev::query::engine::QueryResult::new(s, 1.0))
+                        .collect()
+                } else {
+                    engine.search_by_name(&query, limit)?
+                }
             };
 
             if results.is_empty() {
@@ -233,6 +287,41 @@ fn main() -> anyhow::Result<()> {
                     }
                 }
             }
+        }
+
+        Commands::Embed { database, model: _ } => {
+            let mut store = SqliteStore::open(&database)?;
+            let symbols = store.find_symbols_by_name_pattern("%")?; // Get all symbols
+            
+            if symbols.is_empty() {
+                println!("∅ No symbols found in database to embed.");
+                return Ok(());
+            }
+
+            println!("🧠 Initializing real local embedding model (all-MiniLM-L6-v2)...");
+            let engine = coderev::query::EmbeddingEngine::new()?;
+            
+            println!("🛰️  Generating embeddings for {} symbols in batches...", symbols.len());
+            
+            // Batch processing (32 symbols at a time)
+            let batch_size = 32;
+            let mut processed = 0;
+            
+            for chunk in symbols.chunks(batch_size) {
+                let embeddings = engine.embed_symbols(chunk)?;
+                
+                // Store embeddings in a transaction for speed
+                store.begin_transaction()?;
+                for (i, vector) in embeddings.into_iter().enumerate() {
+                    store.insert_embedding(&chunk[i].uri, &vector)?;
+                }
+                store.commit()?;
+                
+                processed += chunk.len();
+                println!("  Progress: {}/{}", processed, symbols.len());
+            }
+            
+            println!("✅ Embedding complete! All symbols now have real vectors.");
         }
 
         Commands::Callers { uri, database, depth } => {

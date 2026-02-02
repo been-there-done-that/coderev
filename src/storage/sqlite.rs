@@ -293,6 +293,60 @@ impl SqliteStore {
         Ok(count as usize)
     }
 
+    /// Search for symbols by vector similarity
+    pub fn search_by_vector(&self, query_vector: &[f32], limit: usize) -> Result<Vec<(Symbol, f32)>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT uri, vector FROM embeddings"
+        )?;
+        
+        // Fetch all candidates
+        let candidates = stmt.query_map([], |row| {
+            let uri_str: String = row.get(0)?;
+            let blob: Vec<u8> = row.get(1)?;
+            let vector: Vec<f32> = blob.chunks(4)
+                .map(|chunk| f32::from_le_bytes([chunk[0], chunk[1], chunk[2], chunk[3]]))
+                .collect();
+            Ok((uri_str, vector))
+        })?;
+
+        let mut scored_results = Vec::new();
+        for candidate in candidates {
+            if let Ok((uri_str, vector)) = candidate {
+                let score = self.cosine_similarity(query_vector, &vector);
+                scored_results.push((uri_str, score));
+            }
+        }
+
+        // Sort by score descending
+        scored_results.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+        
+        // Take top N and fetch symbols
+        let mut final_results = Vec::new();
+        for (uri_str, score) in scored_results.into_iter().take(limit) {
+            let uri = SymbolUri::parse(&uri_str)?;
+            if let Some(symbol) = self.get_symbol(&uri)? {
+                final_results.push((symbol, score));
+            }
+        }
+
+        Ok(final_results)
+    }
+
+    fn cosine_similarity(&self, a: &[f32], b: &[f32]) -> f32 {
+        if a.len() != b.len() || a.is_empty() {
+            return 0.0;
+        }
+        let dot_product: f32 = a.iter().zip(b.iter()).map(|(x, y)| x * y).sum();
+        let norm_a: f32 = a.iter().map(|x| x * x).sum::<f32>().sqrt();
+        let norm_b: f32 = b.iter().map(|x| x * x).sum::<f32>().sqrt();
+        
+        if norm_a == 0.0 || norm_b == 0.0 {
+            0.0
+        } else {
+            dot_product / (norm_a * norm_b)
+        }
+    }
+
     // ========== Bulk Operations ==========
 
     /// Begin a transaction for bulk operations
