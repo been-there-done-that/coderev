@@ -38,12 +38,12 @@
   body: (class_body) @container.body) @container.def
 
 ; Class with extends
-(class_declaration
-  name: (identifier) @container.name
-  (class_heritage
-    (extends_clause
-      (identifier) @inherits.base))
-  body: (class_body) @container.body) @container.def
+; (class_declaration
+;   name: (identifier) @container.name
+;   (class_heritage
+;     (extends_clause
+;       (identifier) @inherits.base))
+;   body: (class_body) @container.body) @container.def
 
 ; ============ IMPORTS ============
 

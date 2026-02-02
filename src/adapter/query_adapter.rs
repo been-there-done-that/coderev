@@ -445,4 +445,27 @@ impl Point {
         let point_struct = result.symbols.iter().find(|s| s.name == "Point");
         assert!(point_struct.is_some());
     }
+
+    #[test]
+    fn test_javascript_query_adapter() {
+        let adapter = QueryAdapter::javascript().expect("Failed to create JS adapter");
+        
+        let source = r#"
+import { sum } from "./math.js";
+
+export function greet(name) {
+    console.log("Hello " + name);
+}
+
+const result = sum(1, 2);
+"#;
+
+        let result = adapter.parse_file("test", "app.js", source)
+            .expect("Failed to parse");
+
+        assert!(result.symbols.len() >= 2, "Expected at least 2 symbols, got {}", result.symbols.len());
+        
+        let greet_fn = result.symbols.iter().find(|s| s.name == "greet");
+        assert!(greet_fn.is_some());
+    }
 }
