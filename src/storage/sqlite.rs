@@ -193,9 +193,16 @@ impl SqliteStore {
             params.push(rusqlite::types::Value::Integer(limit as i64));
         }
 
-        let symbols = stmt.query_map(rusqlite::params_from_iter(params), |row| self.row_to_symbol(row))?
+        let mut symbols: Vec<Symbol> = stmt.query_map(rusqlite::params_from_iter(params), |row| self.row_to_symbol(row))?
             .filter_map(|r| r.ok())
             .collect();
+        
+        // Sort by file boost descending
+        symbols.sort_by(|a, b| {
+            let boost_a = self.get_file_boost(&a.path);
+            let boost_b = self.get_file_boost(&b.path);
+            boost_b.partial_cmp(&boost_a).unwrap_or(std::cmp::Ordering::Equal)
+        });
         
         Ok(symbols)
     }
@@ -461,28 +468,32 @@ impl SqliteStore {
     pub fn search_by_vector(&self, query_vector: &[f32], limit: usize) -> Result<Vec<(Symbol, f32)>> {
         let conn = self.lock_conn()?;
         let mut stmt = conn.prepare(
-            "SELECT uri, vector FROM embeddings"
+            "SELECT e.uri, e.vector, s.path FROM embeddings e JOIN symbols s ON e.uri = s.uri"
         )?;
         
         // Fetch all candidates
         let candidates = stmt.query_map([], |row| {
             let uri_str: String = row.get(0)?;
             let blob: Vec<u8> = row.get(1)?;
+            let path: String = row.get(2)?;
             let vector: Vec<f32> = blob.chunks(4)
                 .map(|chunk| f32::from_le_bytes([chunk[0], chunk[1], chunk[2], chunk[3]]))
                 .collect();
-            Ok((uri_str, vector))
+            Ok((uri_str, vector, path))
         })?;
 
         let mut scored_results = Vec::new();
         for candidate in candidates {
-            if let Ok((uri_str, vector)) = candidate {
-                let score = self.cosine_similarity(query_vector, &vector);
-                scored_results.push((uri_str, score));
+            if let Ok((uri_str, vector, path)) = candidate {
+                let base_score = self.cosine_similarity(query_vector, &vector);
+                let boost = self.get_file_boost(&path);
+                let boosted_score = base_score * boost;
+                
+                scored_results.push((uri_str, boosted_score));
             }
         }
 
-        // Sort by score descending
+        // Sort by boosted score descending
         scored_results.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
         
         // Take top N and fetch symbols
@@ -495,6 +506,40 @@ impl SqliteStore {
         }
 
         Ok(final_results)
+    }
+
+    fn get_file_boost(&self, path: &str) -> f32 {
+        let path_lower = path.to_lowercase();
+        
+        // Priority extensions (Code)
+        if path_lower.ends_with(".rs") || path_lower.ends_with(".py") || 
+           path_lower.ends_with(".js") || path_lower.ends_with(".ts") ||
+           path_lower.ends_with(".tsx") || path_lower.ends_with(".jsx") ||
+           path_lower.ends_with(".go") || path_lower.ends_with(".c") ||
+           path_lower.ends_with(".cpp") || path_lower.ends_with(".h") {
+            return 1.2;
+        }
+        
+        // Documentation
+        if path_lower.ends_with(".md") || path_lower.ends_with(".txt") || 
+           path_lower.contains("readme") {
+            return 0.9;
+        }
+        
+        // Config/Data
+        if path_lower.ends_with(".json") || path_lower.ends_with(".yaml") || 
+           path_lower.ends_with(".yml") || path_lower.ends_with(".toml") {
+            return 0.7;
+        }
+        
+        // Assets/Build/Lock files (Low priority)
+        if path_lower.ends_with(".svg") || path_lower.ends_with(".png") || 
+           path_lower.ends_with(".lock") || path_lower.ends_with(".sum") ||
+           path_lower.contains("node_modules") || path_lower.contains("target/") {
+            return 0.5;
+        }
+        
+        1.0 // Default
     }
 
     fn cosine_similarity(&self, a: &[f32], b: &[f32]) -> f32 {
@@ -1048,5 +1093,24 @@ mod tests {
         // No match if one word missing
         let results = store.search_content("myclass missing", None, 10).unwrap();
         assert_eq!(results.len(), 0);
+    }
+
+    #[test]
+    fn test_search_boosting() {
+        let store = SqliteStore::open_in_memory().unwrap();
+        
+        // Symbol in code
+        let s_code = Symbol::new("testrepo", "src/main.rs", SymbolKind::Callable, "my_func", 1, 5, "fn my_func() {}");
+        store.insert_symbol(&s_code).unwrap();
+        
+        // Symbol in doc
+        let s_doc = Symbol::new("testrepo", "README.md", SymbolKind::Namespace, "my_func", 1, 1, "Doc about my_func");
+        store.insert_symbol(&s_doc).unwrap();
+        
+        // Search should return the .rs file first due to boost (1.2 vs 0.9)
+        let results = store.search_content("my_func", None, 10).unwrap();
+        assert_eq!(results.len(), 2);
+        assert_eq!(results[0].path, "src/main.rs");
+        assert_eq!(results[1].path, "README.md");
     }
 }
