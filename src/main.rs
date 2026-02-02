@@ -151,17 +151,6 @@ enum Commands {
         #[arg(short, long)]
         verbose: bool,
     },
-
-    /// Start the HTTP API server
-    Serve {
-        /// Port to listen on
-        #[arg(short, long, default_value = "3000")]
-        port: u16,
-
-        /// Path to the database file
-        #[arg(short, long, default_value = "coderev.db")]
-        database: PathBuf,
-    },
 }
 
 #[derive(Default)]
@@ -623,13 +612,6 @@ fn main() -> anyhow::Result<()> {
                     }
                 }
             }
-        }
-        
-        Commands::Serve { port, database } => {
-            let rt = tokio::runtime::Builder::new_multi_thread()
-                .enable_all()
-                .build()?;
-            rt.block_on(coderev::server::start_server(port, database))?;
         }
     }
 
