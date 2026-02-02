@@ -138,9 +138,9 @@ pub fn default_registry() -> AdapterRegistry {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::path::PathBuf;
 
     struct TestAdapter;
+
     
     impl LanguageAdapter for TestAdapter {
         fn language_name(&self) -> &str { "test" }

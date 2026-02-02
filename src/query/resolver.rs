@@ -66,8 +66,7 @@ impl ResolutionStrategy {
 pub struct SymbolIndex {
     /// name → [SymbolUri] (all symbols with this name)
     name_to_uris: HashMap<String, Vec<SymbolUri>>,
-    /// qualified_name (path/name) → SymbolUri
-    qualified_name_to_uri: HashMap<String, SymbolUri>,
+
     /// container URI → methods/members URIs
     container_methods: HashMap<SymbolUri, Vec<SymbolUri>>,
     /// file path → symbol URIs in that file
@@ -80,7 +79,7 @@ impl SymbolIndex {
     /// Build the symbol index from the store
     pub fn build_from_store(store: &SqliteStore) -> Result<Self> {
         let mut name_to_uris: HashMap<String, Vec<SymbolUri>> = HashMap::new();
-        let mut qualified_name_to_uri: HashMap<String, SymbolUri> = HashMap::new();
+
         let mut container_methods: HashMap<SymbolUri, Vec<SymbolUri>> = HashMap::new();
         let mut file_symbols: HashMap<String, Vec<SymbolUri>> = HashMap::new();
         let mut symbols: HashMap<SymbolUri, Symbol> = HashMap::new();
@@ -97,9 +96,7 @@ impl SymbolIndex {
                 .or_default()
                 .push(uri.clone());
             
-            // Index by qualified name (path + name)
-            let qualified = format!("{}:{}", symbol.path, symbol.name);
-            qualified_name_to_uri.insert(qualified, uri.clone());
+
             
             // Index by file
             file_symbols
@@ -131,7 +128,6 @@ impl SymbolIndex {
 
         Ok(Self {
             name_to_uris,
-            qualified_name_to_uri,
             container_methods,
             file_symbols,
             symbols,

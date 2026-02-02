@@ -121,8 +121,9 @@ impl QueryAdapter {
         let mut current_function: Option<(String, SymbolUri)> = None;
 
         // Process all query matches
-        let mut matches = cursor.matches(&self.query, root, source_bytes);
+        let matches = cursor.matches(&self.query, root, source_bytes);
         for query_match in matches {
+
             let mut captures: HashMap<&str, Node> = HashMap::new();
             
             for capture in query_match.captures {
