@@ -162,6 +162,23 @@ impl SqliteStore {
         Ok(symbols)
     }
 
+    /// Get recent symbols (limit N)
+    pub fn get_recent_symbols(&self, limit: usize) -> Result<Vec<Symbol>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT uri, kind, name, path, line_start, line_end, doc, signature, content 
+             FROM symbols 
+             ORDER BY path ASC, line_start ASC
+             LIMIT ?1"
+        )?;
+        
+        let symbols = stmt
+            .query_map([limit], |row| self.row_to_symbol(row))?
+            .filter_map(|r| r.ok())
+            .collect();
+            
+        Ok(symbols)
+    }
+
     /// Count all symbols
     pub fn count_symbols(&self) -> Result<usize> {
         let count: i64 = self.conn.query_row("SELECT COUNT(*) FROM symbols", [], |row| row.get(0))?;
@@ -660,6 +677,98 @@ impl SqliteStore {
             line: row.get(6)?,
             ref_kind: row.get(7)?,
         })
+    }
+}
+
+impl SqliteStore {
+
+    // ========== Incremental Indexing Operations ==========
+
+    /// Get the stored hash for a file
+    pub fn get_file_hash(&self, path: &str) -> Result<Option<String>> {
+        let mut stmt = self.conn.prepare("SELECT hash FROM file_hash WHERE path = ?1")?;
+        let hash: Option<String> = stmt
+            .query_row([path], |row| row.get(0))
+            .optional()?;
+        Ok(hash)
+    }
+
+    /// Update the hash for a file
+    pub fn update_file_hash(&self, path: &str, hash: &str) -> Result<()> {
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs() as i64;
+            
+        self.conn.execute(
+            "INSERT OR REPLACE INTO file_hash (path, hash, last_modified) VALUES (?1, ?2, ?3)",
+            params![path, hash, now],
+        )?;
+        Ok(())
+    }
+
+    /// Remove a file from hash tracking (and cascade delete symbols via logic if needed, 
+    /// though we rely on `delete_symbols_for_file` usually)
+    pub fn remove_file_hash(&self, path: &str) -> Result<()> {
+        self.conn.execute("DELETE FROM file_hash WHERE path = ?1", [path])?;
+        Ok(())
+    }
+    
+    /// Delete all symbols and related data for a file
+    pub fn delete_file_data(&self, path: &str) -> Result<()> {
+        // 1. Find symbols in this file to delete edges/embeddings
+        // Note: cascading deletes might handle some, but let's be explicit where needed
+        // For now, let's just delete symbols. The detailed cleanup might need more complex logic
+        // if we want to be perfect, but "nuke and rebuild" style for a file works too.
+        
+        // Delete symbols (and relying on manual cleanup for edges if no cascade)
+        // Edges don't have FK to symbols(uri) in the schema currently enforced? 
+        // Actually schema doesn't have FKs for edges.
+        // So we should delete edges where from_uri belongs to this file.
+        
+        // Get all symbols for this file first
+        let symbols = self.find_symbols_in_file(path)?;
+        for symbol in symbols {
+            let uri_str = symbol.uri.to_uri_string();
+            // Delete edges from this symbol
+            self.conn.execute("DELETE FROM edges WHERE from_uri = ?1", [&uri_str])?;
+            // Delete edges to this symbol? Maybe keep them but they point to nowhere?
+            // Better to delete them to avoid dangling links.
+            self.conn.execute("DELETE FROM edges WHERE to_uri = ?1", [&uri_str])?;
+            // Delete embeddings
+            self.conn.execute("DELETE FROM embeddings WHERE uri = ?1", [&uri_str])?;
+        }
+
+        // Delete symbols
+        self.conn.execute("DELETE FROM symbols WHERE path = ?1", [path])?;
+        
+        // Manually delete dependent tables for unresolved refs (in case FK cascade is not active)
+        let refs = self.get_unresolved_in_file(path)?;
+        for r in refs {
+            self.conn.execute("DELETE FROM ambiguous_references WHERE reference_id = ?1", [r.id])?;
+            self.conn.execute("DELETE FROM callsite_embeddings WHERE reference_id = ?1", [r.id])?;
+        }
+        
+        // Delete unresolved refs
+        self.conn.execute("DELETE FROM unresolved_references WHERE file_path = ?1", [path])?;
+        
+        // Delete imports
+        self.conn.execute("DELETE FROM imports WHERE file_path = ?1", [path])?;
+        
+        // Delete file hash
+        self.remove_file_hash(path)?;
+
+        Ok(())
+    }
+
+    /// Get all indexed file paths
+    pub fn get_all_indexed_files(&self) -> Result<Vec<String>> {
+        let mut stmt = self.conn.prepare("SELECT path FROM file_hash")?;
+        let paths = stmt
+            .query_map([], |row| row.get(0))?
+            .filter_map(|r| r.ok())
+            .collect();
+        Ok(paths)
     }
 }
 

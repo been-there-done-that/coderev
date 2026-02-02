@@ -70,7 +70,7 @@ CREATE TABLE IF NOT EXISTS ambiguous_references (
     reference_id INTEGER NOT NULL,
     candidate_uri TEXT NOT NULL,
     score REAL DEFAULT 0.0,
-    FOREIGN KEY(reference_id) REFERENCES unresolved_references(id)
+    FOREIGN KEY(reference_id) REFERENCES unresolved_references(id) ON DELETE CASCADE
 )
 "#;
 
@@ -80,10 +80,29 @@ CREATE TABLE IF NOT EXISTS callsite_embeddings (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     reference_id INTEGER NOT NULL,
     vector BLOB NOT NULL,
-    FOREIGN KEY(reference_id) REFERENCES unresolved_references(id)
+    FOREIGN KEY(reference_id) REFERENCES unresolved_references(id) ON DELETE CASCADE
 )
 "#;
 
+
+/// SQL to create the file_hash table
+pub const CREATE_FILE_HASH_TABLE: &str = r#"
+CREATE TABLE IF NOT EXISTS file_hash (
+    path TEXT PRIMARY KEY,
+    hash TEXT NOT NULL,
+    last_modified INTEGER NOT NULL
+)
+"#;
+
+/// SQL to create the symbol_hash table
+pub const CREATE_SYMBOL_HASH_TABLE: &str = r#"
+CREATE TABLE IF NOT EXISTS symbol_hash (
+    symbol_uri TEXT PRIMARY KEY,
+    hash TEXT NOT NULL,
+    embedding_version INTEGER NOT NULL DEFAULT 0,
+    FOREIGN KEY(symbol_uri) REFERENCES symbols(uri) ON DELETE CASCADE
+)
+"#;
 
 /// SQL to create indexes
 pub const CREATE_INDEXES: &[&str] = &[
@@ -109,6 +128,8 @@ pub fn all_schema_statements() -> Vec<&'static str> {
         CREATE_IMPORTS_TABLE,
         CREATE_AMBIGUOUS_REFERENCES_TABLE,
         CREATE_CALLSITE_EMBEDDINGS_TABLE,
+        CREATE_FILE_HASH_TABLE,
+        CREATE_SYMBOL_HASH_TABLE,
     ];
 
 

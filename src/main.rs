@@ -150,9 +150,32 @@ enum Commands {
         #[arg(short, long)]
         verbose: bool,
     },
+
+    /// Start the HTTP API server
+    Serve {
+        /// Port to listen on
+        #[arg(short, long, default_value = "3000")]
+        port: u16,
+
+        /// Path to the database file
+        #[arg(short, long, default_value = "coderev.db")]
+        database: PathBuf,
+    },
+}
+
+#[derive(Default)]
+struct IndexingStats {
+    unchanged: usize,
+    added: usize,
+    modified: usize,
+    deleted: usize,
+    errors: usize,
+    symbols: usize,
+    chunked: usize,
 }
 
 fn main() -> anyhow::Result<()> {
+
     let cli = Cli::parse();
 
     // Initialize logging
@@ -179,21 +202,14 @@ fn main() -> anyhow::Result<()> {
             let mut store = SqliteStore::open(&database)?;
             let registry = adapter::default_registry();
             let chunker = adapter::DocumentChunker::new();
-            let mut total_symbols = 0;
-            let mut total_files = 0;
-            let mut total_unresolved = 0;
-            let mut total_docs_chunked = 0;
+            let mut stats = IndexingStats::default();
 
             println!("🚀 Indexing repository: {}", repo_name);
             println!("📂 Path: {:?}", path);
             println!("🗄️  Database: {:?}", database);
             
-            // Clear old unresolved references and imports before re-indexing
-            store.clear_callsite_embeddings()?;
-            store.clear_unresolved()?;
-            store.clear_imports()?;
-            store.clear_ambiguous_references()?;
-
+            // Track seen files to detect deletions later
+            let mut seen_paths = std::collections::HashSet::new();
 
             for entry in walkdir::WalkDir::new(&path)
                 .into_iter()
@@ -204,167 +220,192 @@ fn main() -> anyhow::Result<()> {
                 let ext = file_path.extension().and_then(|s| s.to_str()).unwrap_or("").to_lowercase();
                 
                 // Skip common binary files
-                let skip_exts = ["png", "jpg", "jpeg", "gif", "ico", "exe", "dll", "so", "o", "a", "lib", "bin", "pdf", "zip", "tar", "gz", "wasm", "node"];
+                let skip_exts = ["png", "jpg", "jpeg", "gif", "ico", "exe", "dll", "so", "o", "a", "lib", "bin", "pdf", "zip", "tar", "gz", "wasm", "node", "db", "sqlite", "lock"];
                 if skip_exts.contains(&ext.as_str()) {
                     continue;
                 }
+                
+                // Read content once
+                let content = match std::fs::read_to_string(file_path) {
+                    Ok(c) => c,
+                    Err(e) => {
+                        tracing::debug!("Skipping binary/unreadable file {}: {}", file_path.display(), e);
+                        continue;
+                    }
+                };
 
+                // Calculate Hash
+                let new_hash = blake3::hash(content.as_bytes()).to_string();
+                let relative_path = file_path.strip_prefix(&path).unwrap_or(file_path);
+                let relative_path_str = relative_path.to_str().unwrap_or("");
+                
+                seen_paths.insert(relative_path_str.to_string());
+
+                // Check change status
+                let stored_hash = store.get_file_hash(relative_path_str)?;
+                if let Some(h) = stored_hash {
+                    if h == new_hash {
+                        // Unchanged
+                        stats.unchanged += 1;
+                        tracing::debug!("Skipping unchanged file: {}", relative_path_str);
+                        continue;
+                    } else {
+                        // Modified
+                        println!("📝 Modified: {:?}", relative_path);
+                        store.delete_file_data(relative_path_str)?;
+                        stats.modified += 1;
+                    }
+                } else {
+                    // New
+                    println!("✨ New: {:?}", relative_path);
+                    stats.added += 1;
+                }
+
+                // Process File
                 if let Some(adapter) = registry.find_adapter(file_path) {
-                    // AST-based parsing for supported languages
-                    let relative_path = file_path.strip_prefix(&path).unwrap_or(file_path);
-                    let relative_path_str = relative_path.to_str().unwrap_or("");
-                    println!("📄 Processing (AST): {:?}", relative_path);
-
-                    match std::fs::read_to_string(file_path) {
-                        Ok(content) => {
-                            match adapter.parse_file(&repo_name, relative_path_str, &content) {
-                                Ok(res) => {
-                                    // Phase 1: Store symbols
-                                    for symbol in &res.symbols {
-                                        store.insert_symbol(symbol)?;
-                                    }
-                                    
-                                    // Phase 1: Store edges (Defines, Contains)
-                                    for edge in &res.edges {
-                                        store.insert_edge(edge)?;
-                                    }
-                                    
-                                    // Phase 2: Persist unresolved references to DB
-                                    for unresolved in res.scope_graph.unresolved_references() {
-                                        let (receiver, name) = if let Some((r, n)) = unresolved.name.rsplit_once('.') {
-                                            (Some(r.to_string()), n.to_string())
-                                        } else {
-                                            (None, unresolved.name.clone())
-                                        };
-
-                                        let persisted = coderev::storage::PersistedUnresolvedReference::new(
-                                            unresolved.from_uri.to_uri_string(),
-                                            name,
-                                            receiver,
-
-                                            unresolved.scope.0 as i64,
-                                            relative_path_str.to_string(),
-                                            unresolved.line,
-                                            "call", // default to call, can be "inherits" for inheritance
-                                        );
-                                        store.insert_unresolved(&persisted)?;
-                                        total_unresolved += 1;
-                                    }
-
-                                    // Phase 1: Store imports
-                                    for import in res.scope_graph.imports(coderev::scope::graph::ScopeId::root()) {
-                                        store.insert_import(
-                                            relative_path_str,
-                                            import.alias.as_deref(),
-                                            &import.namespace,
-                                            Some(import.line),
-                                        )?;
-                                    }
-
-                                    
-                                    total_symbols += res.symbols.len();
-                                    total_files += 1;
-                                }
-                                Err(e) => {
-                                    tracing::error!("Failed to parse {}: {}", file_path.display(), e);
-                                }
+                    // AST-based parsing
+                    match adapter.parse_file(&repo_name, relative_path_str, &content) {
+                        Ok(res) => {
+                            for symbol in &res.symbols {
+                                store.insert_symbol(symbol)?;
                             }
+                            for edge in &res.edges {
+                                store.insert_edge(edge)?;
+                            }
+                            for unresolved in res.scope_graph.unresolved_references() {
+                                let (receiver, name) = if let Some((r, n)) = unresolved.name.rsplit_once('.') {
+                                    (Some(r.to_string()), n.to_string())
+                                } else {
+                                    (None, unresolved.name.clone())
+                                };
+
+                                let persisted = coderev::storage::PersistedUnresolvedReference::new(
+                                    unresolved.from_uri.to_uri_string(),
+                                    name,
+                                    receiver,
+                                    unresolved.scope.0 as i64,
+                                    relative_path_str.to_string(),
+                                    unresolved.line,
+                                    "call",
+                                );
+                                store.insert_unresolved(&persisted)?;
+                            }
+                            for import in res.scope_graph.imports(coderev::scope::graph::ScopeId::root()) {
+                                store.insert_import(
+                                    relative_path_str,
+                                    import.alias.as_deref(),
+                                    &import.namespace,
+                                    Some(import.line),
+                                )?;
+                            }
+                            stats.symbols += res.symbols.len();
                         }
                         Err(e) => {
-                            tracing::debug!("Skipping binary/unreadable file {}: {}", file_path.display(), e);
+                            tracing::error!("Failed to parse {}: {}", file_path.display(), e);
+                            stats.errors += 1;
                         }
                     }
                 } else {
-                    // Fallback: Chunk-based indexing for documents without AST adapter
-                    let relative_path = file_path.strip_prefix(&path).unwrap_or(file_path);
-                    let relative_path_str = relative_path.to_str().unwrap_or("");
-                    println!("📝 Processing (Chunk): {:?}", relative_path);
-
-                    match std::fs::read_to_string(file_path) {
-                        Ok(content) => {
-                            match chunker.chunk_file(&repo_name, relative_path_str, &content) {
-                                Ok(res) => {
-                                    for symbol in &res.symbols {
-                                        store.insert_symbol(symbol)?;
-                                    }
-                                    total_symbols += res.symbols.len();
-                                    total_docs_chunked += 1;
-                                    total_files += 1;
-                                }
-                                Err(e) => {
-                                    tracing::error!("Failed to chunk {}: {}", file_path.display(), e);
-                                }
+                    // Chunk-based indexing
+                    match chunker.chunk_file(&repo_name, relative_path_str, &content) {
+                        Ok(res) => {
+                            for symbol in &res.symbols {
+                                store.insert_symbol(symbol)?;
                             }
+                            stats.symbols += res.symbols.len();
+                            stats.chunked += 1;
                         }
                         Err(e) => {
-                            tracing::debug!("Skipping unreadable file {}: {}", file_path.display(), e);
+                            tracing::error!("Failed to chunk {}: {}", file_path.display(), e);
+                            stats.errors += 1;
                         }
+                    }
+                }
+
+                // Update hash
+                store.update_file_hash(relative_path_str, &new_hash)?;
+            }
+            
+            // Handle Deletions
+            {
+                let db_paths = store.get_all_indexed_files()?;
+                for db_path in db_paths {
+                    if !seen_paths.contains(&db_path) {
+                        println!("🗑️  Deleted: {}", db_path);
+                        store.delete_file_data(&db_path)?;
+                        stats.deleted += 1;
                     }
                 }
             }
 
-            println!("\n📊 Phase 1 Complete:");
-            println!("   Files indexed: {}", total_files);
-            println!("   Symbols: {}", total_symbols);
-            println!("   Documents chunked: {}", total_docs_chunked);
-            println!("   Unresolved refs: {}", total_unresolved);
+            println!("\n📊 Indexing Summary:");
+            println!("   Unchanged: {}", stats.unchanged);
+            println!("   Added:     {}", stats.added);
+            println!("   Modified:  {}", stats.modified);
+            println!("   Deleted:   {}", stats.deleted);
+            println!("   Errors:    {}", stats.errors);
+
+            // Phase 2: Linking
+            // Only run linking if there were changes or if there are unresolved references
+            let something_changed = stats.added > 0 || stats.modified > 0 || stats.deleted > 0;
+            let unresolved_count = store.count_unresolved()?;
             
-            // Phase 2: Run Global Linker (Semantic)
-            if total_unresolved > 0 {
-                println!("\n🔗 Phase 2: Running Global Linker (Semantic)...");
+            if something_changed || unresolved_count > 0 {
+                // If specific files changed, we might want to only resolve relevant things, 
+                // but for now, global re-link is safer and simpler.
+                
+                // We must clear old linking state if we re-link? 
+                // `delete_file_data` removes unresolved refs from modified files.
+                // But `store.clear_unresolved()` was done previously for *everything*.
+                // Now we keep unresolved refs from unchanged files.
+                // But GlobalLinker might generate edges. 
+                // Existing resolved edges?
+                // `GlobalLinker` currently iterates `unresolved_references`.
+                // It inserts edges.
+                // We should probably NOT clear *all* edges, only edges from modified files are gone.
+                // Edges *to* modified files are also gone (handled in delete_file_data).
+                
+                println!("\n🔗 Phase 2: Running Global Linker...");
                 let linker = coderev::linker::GlobalLinker::new(&store);
                 let stats = linker.run()?;
                 println!("{}", stats);
-            } else {
-                println!("\n✅ Phase 2: No unresolved references to resolve.");
-            }
-
-
-            // Phase 3: Generate Semantic Embeddings
-            println!("\n🧠 Phase 3: Generating Semantic Embeddings...");
-            let symbols_to_embed = store.find_symbols_without_embeddings()?;
-            
-            if !symbols_to_embed.is_empty() {
-                println!("🛰️  Generating embeddings for {} symbols in batches...", symbols_to_embed.len());
-                let engine = coderev::query::EmbeddingEngine::new()?;
                 
-                let batch_size = 32;
-                let mut processed = 0;
-                
-                for chunk in symbols_to_embed.chunks(batch_size) {
-                    let embeddings = engine.embed_symbols(chunk)?;
-                    
-                    store.begin_transaction()?;
-                    for (i, vector) in embeddings.into_iter().enumerate() {
-                        store.insert_embedding(&chunk[i].uri, &vector)?;
+                // Phase 3: Embeddings
+                // Only for new symbols
+                let symbols_to_embed = store.find_symbols_without_embeddings()?;
+                if !symbols_to_embed.is_empty() {
+                    println!("\n🧠 Phase 3: Generating Embeddings ({} new symbols)...", symbols_to_embed.len());
+                    let engine = coderev::query::EmbeddingEngine::new()?;
+                    let batch_size = 32;
+                    let mut processed = 0;
+                    for chunk in symbols_to_embed.chunks(batch_size) {
+                        let embeddings = engine.embed_symbols(chunk)?;
+                        store.begin_transaction()?;
+                        for (i, vector) in embeddings.into_iter().enumerate() {
+                            store.insert_embedding(&chunk[i].uri, &vector)?;
+                        }
+                        store.commit()?;
+                        processed += chunk.len();
+                        // print progress...
                     }
-                    store.commit()?;
-                    
-                    processed += chunk.len();
-                    println!("   Progress: {}/{}", processed, symbols_to_embed.len());
+                }
+
+                // Phase 4: Semantic Resolution
+                // Again, only if needed.
+                 println!("\n🧠 Phase 4: Running Semantic Resolver...");
+                let engine = coderev::query::EmbeddingEngine::new()?;
+                let semantic_linker = coderev::linker::SemanticLinker::new(&store, &engine);
+                let stats = semantic_linker.run()?;
+                if stats.resolved > 0 {
+                    println!("✅ Semantic Resolved: {}", stats.resolved);
                 }
             } else {
-                println!("✅ All symbols already have embeddings.");
+                println!("\n✨ Repository is up to date.");
             }
 
-            // Phase 4: Semantic Resolution (Probabilistic)
-            println!("\n🧠 Phase 4: Running Semantic Resolver...");
-            let engine = coderev::query::EmbeddingEngine::new()?;
-            let semantic_linker = coderev::linker::SemanticLinker::new(&store, &engine);
-            let stats = semantic_linker.run()?;
-            if stats.resolved > 0 {
-                println!("✅ Semantic Resolver: Resolved {} references (checked {} candidates)", stats.resolved, stats.candidates);
-            } else {
-                println!("ℹ️  Semantic Resolver: No new edges resolved.");
-            }
-
-            println!("\n✅ Indexing complete!");
-
-            println!("🗄️  Database saved to: {:?}", database);
-            
             // Show final stats
             let final_stats = store.stats()?;
-            println!("{}", final_stats);
+            println!("\n{}", final_stats);
         }
 
         Commands::Search { query, database, limit, kind, vector } => {
@@ -544,6 +585,13 @@ fn main() -> anyhow::Result<()> {
                     }
                 }
             }
+        }
+        
+        Commands::Serve { port, database } => {
+            let rt = tokio::runtime::Builder::new_multi_thread()
+                .enable_all()
+                .build()?;
+            rt.block_on(coderev::server::start_server(port, database))?;
         }
     }
 
