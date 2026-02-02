@@ -178,9 +178,11 @@ fn main() -> anyhow::Result<()> {
             
             let store = SqliteStore::open(&database)?;
             let registry = adapter::default_registry();
+            let chunker = adapter::DocumentChunker::new();
             let mut total_symbols = 0;
             let mut total_files = 0;
             let mut total_unresolved = 0;
+            let mut total_docs_chunked = 0;
 
             println!("🚀 Indexing repository: {}", repo_name);
             println!("📂 Path: {:?}", path);
@@ -195,12 +197,13 @@ fn main() -> anyhow::Result<()> {
                 .filter(|e| e.file_type().is_file())
             {
                 let file_path = entry.path();
-                let _ext = file_path.extension().and_then(|s| s.to_str()).unwrap_or("");
+                let ext = file_path.extension().and_then(|s| s.to_str()).unwrap_or("");
                 
                 if let Some(adapter) = registry.find_adapter(file_path) {
+                    // AST-based parsing for supported languages
                     let relative_path = file_path.strip_prefix(&path).unwrap_or(file_path);
                     let relative_path_str = relative_path.to_str().unwrap_or("");
-                    println!("📄 Processing: {:?}", relative_path);
+                    println!("📄 Processing (AST): {:?}", relative_path);
 
                     match std::fs::read_to_string(file_path) {
                         Ok(content) => {
@@ -243,12 +246,39 @@ fn main() -> anyhow::Result<()> {
                             tracing::error!("Failed to read {}: {}", file_path.display(), e);
                         }
                     }
+                } else if adapter::DocumentChunker::supports_extension(ext) {
+                    // Fallback: Chunk-based indexing for documents without AST adapter
+                    let relative_path = file_path.strip_prefix(&path).unwrap_or(file_path);
+                    let relative_path_str = relative_path.to_str().unwrap_or("");
+                    println!("📝 Processing (Chunk): {:?}", relative_path);
+
+                    match std::fs::read_to_string(file_path) {
+                        Ok(content) => {
+                            match chunker.chunk_file(&repo_name, relative_path_str, &content) {
+                                Ok(res) => {
+                                    for symbol in &res.symbols {
+                                        store.insert_symbol(symbol)?;
+                                    }
+                                    total_symbols += res.symbols.len();
+                                    total_docs_chunked += 1;
+                                    total_files += 1;
+                                }
+                                Err(e) => {
+                                    tracing::error!("Failed to chunk {}: {}", file_path.display(), e);
+                                }
+                            }
+                        }
+                        Err(e) => {
+                            tracing::debug!("Skipping binary/unreadable file {}: {}", file_path.display(), e);
+                        }
+                    }
                 }
             }
 
             println!("\n📊 Phase 1 Complete:");
             println!("   Files indexed: {}", total_files);
             println!("   Symbols: {}", total_symbols);
+            println!("   Documents chunked: {}", total_docs_chunked);
             println!("   Unresolved refs: {}", total_unresolved);
             
             // Phase 2: Run Global Linker
@@ -286,15 +316,12 @@ fn main() -> anyhow::Result<()> {
                 let query_vector = embedding_engine.embed_query(&query)?;
                 engine.search_by_vector(&query_vector, limit)?
             } else {
+                // Default: search in name, content, and doc fields
                 println!("🔍 Searching for: '{}' (kind: {:?}, limit: {})...", query, kind, limit);
-                if let Some(k) = parsed_kind {
-                    engine.search_by_kind(k, Some(&query), limit)?
-                        .into_iter()
-                        .map(|s| coderev::query::engine::QueryResult::new(s, 1.0))
-                        .collect()
-                } else {
-                    engine.search_by_name(&query, limit)?
-                }
+                store.search_content(&query, parsed_kind, limit)?
+                    .into_iter()
+                    .map(|s| coderev::query::engine::QueryResult::new(s, 1.0))
+                    .collect()
             };
 
             if results.is_empty() {

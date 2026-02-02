@@ -131,6 +131,37 @@ impl SqliteStore {
         Ok(symbols)
     }
 
+    /// Search symbols by content (searches within the code/document content)
+    pub fn search_content(&self, query: &str, kind: Option<SymbolKind>, limit: usize) -> Result<Vec<Symbol>> {
+        let pattern = format!("%{}%", query);
+        
+        let sql = if kind.is_some() {
+            "SELECT uri, kind, name, path, line_start, line_end, doc, signature, content 
+             FROM symbols 
+             WHERE (content LIKE ?1 OR name LIKE ?1 OR doc LIKE ?1) AND kind = ?2
+             LIMIT ?3"
+        } else {
+            "SELECT uri, kind, name, path, line_start, line_end, doc, signature, content 
+             FROM symbols 
+             WHERE content LIKE ?1 OR name LIKE ?1 OR doc LIKE ?1
+             LIMIT ?2"
+        };
+        
+        let mut stmt = self.conn.prepare(sql)?;
+        
+        let symbols: Vec<Symbol> = if let Some(k) = kind {
+            stmt.query_map(params![pattern, k.as_str(), limit as i64], |row| self.row_to_symbol(row))?
+                .filter_map(|r| r.ok())
+                .collect()
+        } else {
+            stmt.query_map(params![pattern, limit as i64], |row| self.row_to_symbol(row))?
+                .filter_map(|r| r.ok())
+                .collect()
+        };
+        
+        Ok(symbols)
+    }
+
     /// Count all symbols
     pub fn count_symbols(&self) -> Result<usize> {
         let count: i64 = self.conn.query_row("SELECT COUNT(*) FROM symbols", [], |row| row.get(0))?;
