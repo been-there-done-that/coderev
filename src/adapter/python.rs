@@ -6,9 +6,9 @@ use crate::{Result, Error};
 use crate::edge::{Edge, EdgeKind};
 use crate::symbol::{Symbol, SymbolKind};
 use crate::uri::SymbolUri;
-use crate::scope::graph::{ScopeGraph, ScopeId, ScopeKind, Import, UnresolvedReference};
+use crate::scope::graph::{ScopeId, ScopeKind, UnresolvedReference, Import};
 use super::framework::{LanguageAdapter, AdapterResult};
-use tree_sitter::{Parser, Query, QueryCursor, Node};
+use tree_sitter::{Parser, Node};
 
 /// Python language adapter
 pub struct PythonAdapter {
@@ -19,8 +19,8 @@ impl PythonAdapter {
     /// Create a new Python adapter
     pub fn new() -> Self {
         let mut parser = Parser::new();
-        // Note: In a real implementation, you'd load the Python grammar here
-        // parser.set_language(&tree_sitter_python::LANGUAGE.into()).unwrap();
+        parser.set_language(&tree_sitter_python::LANGUAGE.into())
+            .expect("Error loading Python grammar");
         
         Self {
             parser: std::sync::Mutex::new(parser),
@@ -111,55 +111,25 @@ impl PythonAdapter {
         for child in node.named_children(&mut cursor) {
             match child.kind() {
                 "function_definition" => {
-                    if let Some(symbol) = self.extract_function(child, source, repo, path) {
-                        let uri = symbol.uri.clone();
-                        
-                        // Add defines edge from parent (namespace or class)
-                        if let Some(parent) = parent_uri {
-                            result.add_edge(Edge::new(parent.clone(), uri.clone(), EdgeKind::Defines));
-                        }
-                        
-                        // Add definition to scope
-                        result.scope_graph.add_definition(current_scope, &symbol.name, uri.clone());
-                        
-                        // Create function scope
-                        let func_scope = result.scope_graph.add_scope(current_scope, ScopeKind::Function);
-                        
-                        result.add_symbol(symbol);
-                        
-                        // Process function body
-                        if let Some(body) = child.child_by_field_name("body") {
-                            self.walk_tree(body, source, repo, path, result, func_scope, Some(&uri));
+                    self.process_function(child, source, repo, path, result, current_scope, parent_uri);
+                }
+                "decorated_definition" => {
+                    // Extract function/class from inside the decorator
+                    let mut inner_cursor = child.walk();
+                    for inner_child in child.named_children(&mut inner_cursor) {
+                        match inner_child.kind() {
+                            "function_definition" => {
+                                self.process_function(inner_child, source, repo, path, result, current_scope, parent_uri);
+                            }
+                            "class_definition" => {
+                                self.process_class(inner_child, source, repo, path, result, current_scope, parent_uri);
+                            }
+                            _ => {}
                         }
                     }
                 }
                 "class_definition" => {
-                    if let Some(symbol) = self.extract_class(child, source, repo, path) {
-                        let uri = symbol.uri.clone();
-                        
-                        // Add defines edge from parent
-                        if let Some(parent) = parent_uri {
-                            result.add_edge(Edge::new(parent.clone(), uri.clone(), EdgeKind::Defines));
-                        }
-                        
-                        // Add definition to scope
-                        result.scope_graph.add_definition(current_scope, &symbol.name, uri.clone());
-                        
-                        // Create class scope
-                        let class_scope = result.scope_graph.add_scope(current_scope, ScopeKind::Class);
-                        
-                        // Check for inheritance
-                        if let Some(bases) = child.child_by_field_name("superclasses") {
-                            self.extract_inheritance(bases, source, &uri, result, class_scope);
-                        }
-                        
-                        result.add_symbol(symbol);
-                        
-                        // Process class body
-                        if let Some(body) = child.child_by_field_name("body") {
-                            self.walk_tree(body, source, repo, path, result, class_scope, Some(&uri));
-                        }
-                    }
+                    self.process_class(child, source, repo, path, result, current_scope, parent_uri);
                 }
                 "import_statement" | "import_from_statement" => {
                     self.extract_import(child, source, result, current_scope);
@@ -168,11 +138,46 @@ impl PythonAdapter {
                     if let Some(parent) = parent_uri {
                         self.extract_call(child, source, parent, result, current_scope);
                     }
+                    // Continue walking children of the call (e.g., arguments)
+                    self.walk_tree(child, source, repo, path, result, current_scope, parent_uri);
                 }
                 _ => {
                     // Recurse into other nodes
                     self.walk_tree(child, source, repo, path, result, current_scope, parent_uri);
                 }
+            }
+        }
+    }
+
+    fn process_function(&self, node: Node, source: &str, repo: &str, path: &str, result: &mut AdapterResult, scope: ScopeId, parent_uri: Option<&SymbolUri>) {
+        if let Some(symbol) = self.extract_function(node, source, repo, path) {
+            let uri = symbol.uri.clone();
+            if let Some(parent) = parent_uri {
+                result.add_edge(Edge::new(parent.clone(), uri.clone(), EdgeKind::Defines));
+            }
+            result.scope_graph.add_definition(scope, &symbol.name, uri.clone());
+            let func_scope = result.scope_graph.add_scope(scope, ScopeKind::Function);
+            result.add_symbol(symbol);
+            if let Some(body) = node.child_by_field_name("body") {
+                self.walk_tree(body, source, repo, path, result, func_scope, Some(&uri));
+            }
+        }
+    }
+
+    fn process_class(&self, node: Node, source: &str, repo: &str, path: &str, result: &mut AdapterResult, scope: ScopeId, parent_uri: Option<&SymbolUri>) {
+        if let Some(symbol) = self.extract_class(node, source, repo, path) {
+            let uri = symbol.uri.clone();
+            if let Some(parent) = parent_uri {
+                result.add_edge(Edge::new(parent.clone(), uri.clone(), EdgeKind::Defines));
+            }
+            result.scope_graph.add_definition(scope, &symbol.name, uri.clone());
+            let class_scope = result.scope_graph.add_scope(scope, ScopeKind::Class);
+            if let Some(bases) = node.child_by_field_name("superclasses") {
+                self.extract_inheritance(bases, source, &uri, result, class_scope);
+            }
+            result.add_symbol(symbol);
+            if let Some(body) = node.child_by_field_name("body") {
+                self.walk_tree(body, source, repo, path, result, class_scope, Some(&uri));
             }
         }
     }
@@ -270,12 +275,14 @@ impl LanguageAdapter for PythonAdapter {
     }
 
     fn parse_file(&self, repo: &str, path: &str, content: &str) -> Result<AdapterResult> {
-        // For now, return empty result - full implementation requires tree-sitter-python grammar
-        // which needs to be added as a dependency
+        let mut parser = self.parser.lock().map_err(|_| Error::Adapter("Failed to lock parser".to_string()))?;
+        let tree = parser.parse(content, None)
+            .ok_or_else(|| Error::Adapter("Failed to parse file".to_string()))?;
+        
         let mut result = AdapterResult::new();
         
-        // Create namespace symbol for the file
-        let namespace = Symbol::new(
+        // Create root file/namespace symbol
+        let file_symbol = Symbol::new(
             repo,
             path,
             SymbolKind::Namespace,
@@ -284,104 +291,15 @@ impl LanguageAdapter for PythonAdapter {
             content.lines().count() as u32,
             content,
         );
-        let ns_uri = namespace.uri.clone();
-        result.add_symbol(namespace);
+        let file_uri = file_symbol.uri.clone();
+        result.add_symbol(file_symbol);
         
-        // TODO: Full tree-sitter parsing
-        // For now, we'll use a simple regex-based extraction as a placeholder
-        self.simple_extract(repo, path, content, &mut result, &ns_uri);
+        let root_scope = ScopeId::root();
+        
+        // Recursive walk
+        self.walk_tree(tree.root_node(), content, repo, path, &mut result, root_scope, Some(&file_uri));
         
         Ok(result)
-    }
-}
-
-impl PythonAdapter {
-    /// Simple extraction without full tree-sitter (placeholder)
-    fn simple_extract(&self, repo: &str, path: &str, content: &str, result: &mut AdapterResult, ns_uri: &SymbolUri) {
-        let lines: Vec<&str> = content.lines().collect();
-        let mut current_class: Option<(String, u32)> = None;
-        
-        for (i, line) in lines.iter().enumerate() {
-            let line_num = (i + 1) as u32;
-            let trimmed = line.trim();
-            
-            // Simple function detection
-            if trimmed.starts_with("def ") || trimmed.starts_with("async def ") {
-                if let Some(name) = Self::extract_name_from_def(trimmed) {
-                    let end_line = Self::find_block_end(&lines, i);
-                    let block_content = lines[i..=end_line].join("\n");
-                    
-                    let kind = if current_class.is_some() {
-                        SymbolKind::Callable // method
-                    } else {
-                        SymbolKind::Callable // function
-                    };
-                    
-                    let symbol = Symbol::new(repo, path, kind, &name, line_num, end_line as u32 + 1, block_content);
-                    result.add_edge(Edge::new(ns_uri.clone(), symbol.uri.clone(), EdgeKind::Defines));
-                    result.add_symbol(symbol);
-                }
-            }
-            
-            // Simple class detection
-            if trimmed.starts_with("class ") {
-                if let Some(name) = Self::extract_name_from_class(trimmed) {
-                    let end_line = Self::find_block_end(&lines, i);
-                    let block_content = lines[i..=end_line].join("\n");
-                    
-                    let symbol = Symbol::new(repo, path, SymbolKind::Container, &name, line_num, end_line as u32 + 1, block_content);
-                    result.add_edge(Edge::new(ns_uri.clone(), symbol.uri.clone(), EdgeKind::Defines));
-                    result.add_symbol(symbol);
-                    
-                    current_class = Some((name, end_line as u32 + 1));
-                }
-            }
-            
-            // Reset class context when we pass its end
-            if let Some((_, end)) = current_class {
-                if line_num > end {
-                    current_class = None;
-                }
-            }
-        }
-    }
-
-    fn extract_name_from_def(line: &str) -> Option<String> {
-        let line = line.trim();
-        let after_def = if line.starts_with("async def ") {
-            &line[10..]
-        } else if line.starts_with("def ") {
-            &line[4..]
-        } else {
-            return None;
-        };
-        after_def.split('(').next().map(|s| s.trim().to_string())
-    }
-
-    fn extract_name_from_class(line: &str) -> Option<String> {
-        let trimmed = line.trim_start_matches("class ");
-        trimmed.split(['(', ':']).next().map(|s| s.trim().to_string())
-    }
-
-    fn find_block_end(lines: &[&str], start: usize) -> usize {
-        if start >= lines.len() {
-            return start;
-        }
-        
-        let start_indent = lines[start].len() - lines[start].trim_start().len();
-        
-        for i in (start + 1)..lines.len() {
-            let line = lines[i];
-            if line.trim().is_empty() {
-                continue;
-            }
-            let indent = line.len() - line.trim_start().len();
-            if indent <= start_indent && !line.trim().is_empty() {
-                return i.saturating_sub(1);
-            }
-        }
-        
-        lines.len() - 1
     }
 }
 

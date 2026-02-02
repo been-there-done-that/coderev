@@ -7,7 +7,7 @@
 //! - Interface implementation search
 
 use std::collections::{HashSet, VecDeque};
-use crate::{Result, Error};
+use crate::Result;
 use crate::edge::EdgeKind;
 use crate::symbol::{Symbol, SymbolKind};
 use crate::uri::SymbolUri;

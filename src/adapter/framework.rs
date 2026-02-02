@@ -2,10 +2,10 @@
 //!
 //! Defines the traits and types that all language adapters must implement.
 
-use crate::{Result, Error};
+use crate::Result;
 use crate::edge::Edge;
 use crate::symbol::Symbol;
-use crate::scope::graph::{ScopeGraph, Import, UnresolvedReference};
+use crate::scope::graph::ScopeGraph;
 use std::path::Path;
 
 /// Result of parsing a file with a language adapter

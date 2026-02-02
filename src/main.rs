@@ -5,7 +5,7 @@ use std::path::PathBuf;
 use coderev::storage::SqliteStore;
 use coderev::adapter;
 use coderev::query::QueryEngine;
-use coderev::symbol::SymbolKind;
+use coderev::SymbolKind;
 use tracing_subscriber::{fmt, prelude::*, EnvFilter};
 
 #[derive(Parser)]
@@ -166,7 +166,7 @@ fn main() -> anyhow::Result<()> {
                 .filter(|e| e.file_type().is_file())
             {
                 let file_path = entry.path();
-                let ext = file_path.extension().and_then(|s| s.to_str()).unwrap_or("");
+                let _ext = file_path.extension().and_then(|s| s.to_str()).unwrap_or("");
                 
                 if let Some(adapter) = registry.find_adapter(file_path) {
                     let relative_path = file_path.strip_prefix(&path).unwrap_or(file_path);
@@ -178,6 +178,9 @@ fn main() -> anyhow::Result<()> {
                                 Ok(res) => {
                                     for symbol in &res.symbols {
                                         store.insert_symbol(symbol)?;
+                                    }
+                                    for edge in &res.edges {
+                                        store.insert_edge(edge)?;
                                     }
                                     total_symbols += res.symbols.len();
                                     total_files += 1;
@@ -291,10 +294,12 @@ fn main() -> anyhow::Result<()> {
         }
 
         Commands::Stats { database } => {
-            tracing::info!("Getting stats from {:?}", database);
+            let store = SqliteStore::open(&database)?;
+            let stats = store.stats()?;
             
-            // TODO: Implement stats
-            println!("✓ Stats not yet implemented - Phase 2");
+            println!("📊 Coderev Statistics ({:?})", database);
+            println!("------------------------------------");
+            println!("{}", stats);
         }
     }
 
