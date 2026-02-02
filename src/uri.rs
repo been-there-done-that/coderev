@@ -19,7 +19,7 @@ use serde::{Deserialize, Serialize};
 /// - Edges
 /// - Embeddings
 /// - Search results
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct SymbolUri {
     /// Repository identifier
     pub repo: String,
@@ -101,6 +101,26 @@ impl FromStr for SymbolUri {
 
     fn from_str(s: &str) -> Result<Self> {
         Self::parse(s)
+    }
+}
+
+
+impl Serialize for SymbolUri {
+    fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        serializer.serialize_str(&self.to_uri_string())
+    }
+}
+
+impl<'de> Deserialize<'de> for SymbolUri {
+    fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        let s = String::deserialize(deserializer)?;
+        SymbolUri::parse(&s).map_err(serde::de::Error::custom)
     }
 }
 
