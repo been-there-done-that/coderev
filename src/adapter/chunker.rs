@@ -141,11 +141,17 @@ impl DocumentChunker {
                     });
 
                     // Start new chunk with overlap
-                    let overlap_start = if break_at > self.overlap {
+                    let raw_overlap_start = if break_at > self.overlap {
                         break_at - self.overlap
                     } else {
                         0
                     };
+                    
+                    // Align to char boundary
+                    let mut overlap_start = raw_overlap_start;
+                    while !current_chunk.is_char_boundary(overlap_start) && overlap_start > 0 {
+                        overlap_start -= 1;
+                    }
                     
                     current_chunk = current_chunk[overlap_start..].to_string();
                     chunk_start_line = chunk_start_line + chunk_lines - (current_chunk.lines().count() as u32);
@@ -177,21 +183,51 @@ impl DocumentChunker {
 
     /// Find a natural break point in the content
     fn find_break_point(&self, content: &str) -> usize {
-        let search_window = content.len().min(self.chunk_size + 500);
-        let search_start = if content.len() > 500 { content.len() - 500 } else { 0 };
-        let search_area = &content[search_start..search_window.min(content.len())];
+        // We want to break roughly at chunk_size
+        let target_len = self.chunk_size;
+        
+        // Define search window around the target length (chunk_size +/- 500)
+        let mut start_scan = if target_len > 500 { target_len - 500 } else { 0 };
+        // Align start_scan
+        while !content.is_char_boundary(start_scan) && start_scan > 0 {
+             start_scan -= 1;
+        }
 
-        // Priority: double newline (paragraph), then single newline
-        if let Some(pos) = search_area.rfind("\n\n") {
-            return search_start + pos + 2;
+        let mut end_scan = (target_len + 500).min(content.len());
+        // Align end_scan
+        while !content.is_char_boundary(end_scan) && end_scan < content.len() {
+             end_scan += 1;
         }
         
+        // If content is smaller than where we start scanning, just return content length
+        if start_scan >= content.len() {
+            return content.len();
+        }
+        
+        let search_area = &content[start_scan..end_scan];
+
+        // Priority 1: double newline (paragraph break)
+        if let Some(pos) = search_area.rfind("\n\n") {
+            return start_scan + pos + 2;
+        }
+        
+        // Priority 2: single newline
         if let Some(pos) = search_area.rfind('\n') {
-            return search_start + pos + 1;
+            return start_scan + pos + 1;
+        }
+        
+        // Priority 3: space (word boundary) - helpful for minified files without newlines
+        if let Some(pos) = search_area.rfind(' ') {
+            return start_scan + pos + 1;
         }
 
-        // Fallback: break at chunk_size
-        self.chunk_size.min(content.len())
+        // Fallback: hard cut at chunk_size (or content length if smaller)
+        // Ensure fallback is also on char boundary
+        let mut fallback = target_len.min(content.len());
+        while !content.is_char_boundary(fallback) && fallback > 0 {
+             fallback -= 1;
+        }
+        fallback
     }
 
     /// Get the file extensions this chunker handles

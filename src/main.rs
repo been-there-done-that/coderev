@@ -211,16 +211,49 @@ fn main() -> anyhow::Result<()> {
             // Track seen files to detect deletions later
             let mut seen_paths = std::collections::HashSet::new();
 
-            for entry in walkdir::WalkDir::new(&path)
-                .into_iter()
-                .filter_map(|e| e.ok())
-                .filter(|e| e.file_type().is_file())
-            {
+            // Configure file walker with smart ignores
+            let mut builder = ignore::WalkBuilder::new(&path);
+            builder.standard_filters(true)
+                .add_custom_ignore_filename(".cursorignore");
+
+            // Add default ignores for common junk folders via manual filter
+            builder.filter_entry(|entry| {
+                let name = entry.file_name().to_string_lossy();
+                let ignored = [
+                    "node_modules",
+                    ".venv",
+                    "env",
+                    ".env",
+                    "vendor",
+                    "target",
+                    "dist",
+                    "build",
+                    "__pycache__",
+                    ".git",
+                    ".idea",
+                    ".vscode",
+                ];
+                !ignored.contains(&name.as_ref())
+            });
+
+            for result in builder.build() {
+                let entry = match result {
+                    Ok(e) => e,
+                    Err(err) => {
+                        tracing::error!("Error walking directory: {}", err);
+                        continue;
+                    }
+                };
+
+                if !entry.file_type().map(|ft| ft.is_file()).unwrap_or(false) {
+                    continue;
+                }
+                
                 let file_path = entry.path();
                 let ext = file_path.extension().and_then(|s| s.to_str()).unwrap_or("").to_lowercase();
                 
-                // Skip common binary files
-                let skip_exts = ["png", "jpg", "jpeg", "gif", "ico", "exe", "dll", "so", "o", "a", "lib", "bin", "pdf", "zip", "tar", "gz", "wasm", "node", "db", "sqlite", "lock"];
+                // Skip common binary files (keep this as a secondary check)
+                let skip_exts = ["png", "jpg", "jpeg", "gif", "ico", "exe", "dll", "so", "o", "a", "lib", "bin", "pdf", "zip", "tar", "gz", "wasm", "node", "db", "sqlite", "lock", "pyc"];
                 if skip_exts.contains(&ext.as_str()) {
                     continue;
                 }

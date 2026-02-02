@@ -39,7 +39,7 @@ tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 
 # Utilities
-walkdir = "2.5"
+ignore = "0.4"
 tree-sitter-rust = "0.23"
 tree-sitter-go = "0.23"
 blake3 = "1.8.3"
