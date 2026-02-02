@@ -381,7 +381,151 @@ impl SqliteStore {
             symbols: self.count_symbols()?,
             edges: self.count_edges()?,
             embeddings: self.count_embeddings()?,
+            unresolved: self.count_unresolved()?,
         })
+    }
+
+    // ========== Unresolved Reference Operations ==========
+
+    /// Insert an unresolved reference
+    pub fn insert_unresolved(&self, unresolved: &PersistedUnresolvedReference) -> Result<()> {
+        self.conn.execute(
+            r#"
+            INSERT INTO unresolved_references (from_uri, name, receiver, scope_id, file_path, line, ref_kind)
+            VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)
+            "#,
+            params![
+                unresolved.from_uri,
+                unresolved.name,
+                unresolved.receiver,
+                unresolved.scope_id,
+                unresolved.file_path,
+                unresolved.line,
+                unresolved.ref_kind,
+            ],
+        )?;
+        Ok(())
+    }
+
+    /// Get unresolved references by name
+    pub fn get_unresolved_by_name(&self, name: &str) -> Result<Vec<PersistedUnresolvedReference>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT id, from_uri, name, receiver, scope_id, file_path, line, ref_kind FROM unresolved_references WHERE name = ?1"
+        )?;
+        
+        let refs = stmt
+            .query_map([name], |row| self.row_to_unresolved(row))?
+            .filter_map(|r| r.ok())
+            .collect();
+        
+        Ok(refs)
+    }
+
+    /// Get all unresolved references
+    pub fn get_all_unresolved(&self) -> Result<Vec<PersistedUnresolvedReference>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT id, from_uri, name, receiver, scope_id, file_path, line, ref_kind FROM unresolved_references"
+        )?;
+        
+        let refs = stmt
+            .query_map([], |row| self.row_to_unresolved(row))?
+            .filter_map(|r| r.ok())
+            .collect();
+        
+        Ok(refs)
+    }
+
+    /// Get unresolved references for a specific file
+    pub fn get_unresolved_in_file(&self, file_path: &str) -> Result<Vec<PersistedUnresolvedReference>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT id, from_uri, name, receiver, scope_id, file_path, line, ref_kind FROM unresolved_references WHERE file_path = ?1"
+        )?;
+        
+        let refs = stmt
+            .query_map([file_path], |row| self.row_to_unresolved(row))?
+            .filter_map(|r| r.ok())
+            .collect();
+        
+        Ok(refs)
+    }
+
+    /// Delete an unresolved reference by ID
+    pub fn delete_unresolved(&self, id: i64) -> Result<()> {
+        self.conn.execute("DELETE FROM unresolved_references WHERE id = ?1", [id])?;
+        Ok(())
+    }
+
+    /// Clear all unresolved references
+    pub fn clear_unresolved(&self) -> Result<()> {
+        self.conn.execute("DELETE FROM unresolved_references", [])?;
+        Ok(())
+    }
+
+    /// Count unresolved references
+    pub fn count_unresolved(&self) -> Result<usize> {
+        let count: i64 = self.conn.query_row("SELECT COUNT(*) FROM unresolved_references", [], |row| row.get(0))?;
+        Ok(count as usize)
+    }
+
+    /// Helper to convert a row to PersistedUnresolvedReference
+    fn row_to_unresolved(&self, row: &rusqlite::Row) -> rusqlite::Result<PersistedUnresolvedReference> {
+        Ok(PersistedUnresolvedReference {
+            id: row.get(0)?,
+            from_uri: row.get(1)?,
+            name: row.get(2)?,
+            receiver: row.get(3)?,
+            scope_id: row.get(4)?,
+            file_path: row.get(5)?,
+            line: row.get(6)?,
+            ref_kind: row.get(7)?,
+        })
+    }
+}
+
+/// Persisted unresolved reference (stored in DB)
+#[derive(Debug, Clone)]
+pub struct PersistedUnresolvedReference {
+    pub id: i64,
+    pub from_uri: String,
+    pub name: String,
+    pub receiver: Option<String>,
+    pub scope_id: i64,
+    pub file_path: String,
+    pub line: u32,
+    pub ref_kind: String,
+}
+
+impl PersistedUnresolvedReference {
+    /// Create a new unresolved reference for insertion (id will be set by DB)
+    pub fn new(
+        from_uri: String,
+        name: String,
+        receiver: Option<String>,
+        scope_id: i64,
+        file_path: String,
+        line: u32,
+        ref_kind: &str,
+    ) -> Self {
+        Self {
+            id: 0, // Set by DB
+            from_uri,
+            name,
+            receiver,
+            scope_id,
+            file_path,
+            line,
+            ref_kind: ref_kind.to_string(),
+        }
+    }
+
+    /// Check if this is a call reference
+    pub fn is_call(&self) -> bool {
+        self.ref_kind == "call"
+    }
+
+    /// Check if this is an inheritance reference
+    pub fn is_inheritance(&self) -> bool {
+        self.ref_kind == "inherits"
     }
 }
 
@@ -391,6 +535,7 @@ pub struct DbStats {
     pub symbols: usize,
     pub edges: usize,
     pub embeddings: usize,
+    pub unresolved: usize,
 }
 
 impl std::fmt::Display for DbStats {
@@ -398,7 +543,8 @@ impl std::fmt::Display for DbStats {
         writeln!(f, "Database Statistics:")?;
         writeln!(f, "  Symbols: {}", self.symbols)?;
         writeln!(f, "  Edges: {}", self.edges)?;
-        writeln!(f, "  Embeddings: {}", self.embeddings)
+        writeln!(f, "  Embeddings: {}", self.embeddings)?;
+        writeln!(f, "  Unresolved: {}", self.unresolved)
     }
 }
 

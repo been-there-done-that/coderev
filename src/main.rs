@@ -139,6 +139,17 @@ enum Commands {
         #[arg(short, long, default_value = "coderev.db")]
         database: PathBuf,
     },
+
+    /// Run the global resolver to resolve unresolved references
+    Resolve {
+        /// Path to the database file
+        #[arg(short, long, default_value = "coderev.db")]
+        database: PathBuf,
+
+        /// Show verbose output
+        #[arg(short, long)]
+        verbose: bool,
+    },
 }
 
 fn main() -> anyhow::Result<()> {
@@ -165,16 +176,18 @@ fn main() -> anyhow::Result<()> {
                     .unwrap_or_else(|| "unknown".to_string())
             });
             
-            // TODO: Implement indexing
             let store = SqliteStore::open(&database)?;
             let registry = adapter::default_registry();
             let mut total_symbols = 0;
             let mut total_files = 0;
-            let mut unresolved_refs = Vec::new();
+            let mut total_unresolved = 0;
 
             println!("🚀 Indexing repository: {}", repo_name);
             println!("📂 Path: {:?}", path);
             println!("🗄️  Database: {:?}", database);
+            
+            // Clear old unresolved references before re-indexing
+            store.clear_unresolved()?;
 
             for entry in walkdir::WalkDir::new(&path)
                 .into_iter()
@@ -186,22 +199,36 @@ fn main() -> anyhow::Result<()> {
                 
                 if let Some(adapter) = registry.find_adapter(file_path) {
                     let relative_path = file_path.strip_prefix(&path).unwrap_or(file_path);
+                    let relative_path_str = relative_path.to_str().unwrap_or("");
                     println!("📄 Processing: {:?}", relative_path);
 
                     match std::fs::read_to_string(file_path) {
                         Ok(content) => {
-                            match adapter.parse_file(&repo_name, relative_path.to_str().unwrap_or(""), &content) {
+                            match adapter.parse_file(&repo_name, relative_path_str, &content) {
                                 Ok(res) => {
+                                    // Phase 1: Store symbols
                                     for symbol in &res.symbols {
                                         store.insert_symbol(symbol)?;
                                     }
+                                    
+                                    // Phase 1: Store edges (Defines, Contains)
                                     for edge in &res.edges {
                                         store.insert_edge(edge)?;
                                     }
                                     
-                                    // Collect unresolved references for the second pass
+                                    // Phase 2: Persist unresolved references to DB
                                     for unresolved in res.scope_graph.unresolved_references() {
-                                        unresolved_refs.push(unresolved.clone());
+                                        let persisted = coderev::storage::PersistedUnresolvedReference::new(
+                                            unresolved.from_uri.to_uri_string(),
+                                            unresolved.name.clone(),
+                                            None, // receiver - extracted from name if needed
+                                            unresolved.scope.0 as i64,
+                                            relative_path_str.to_string(),
+                                            unresolved.line,
+                                            "call", // default to call, can be "inherits" for inheritance
+                                        );
+                                        store.insert_unresolved(&persisted)?;
+                                        total_unresolved += 1;
                                     }
                                     
                                     total_symbols += res.symbols.len();
@@ -218,33 +245,28 @@ fn main() -> anyhow::Result<()> {
                     }
                 }
             }
+
+            println!("\n📊 Phase 1 Complete:");
+            println!("   Files indexed: {}", total_files);
+            println!("   Symbols: {}", total_symbols);
+            println!("   Unresolved refs: {}", total_unresolved);
             
-            // Phase 7: Multi-pass Resolution
-            if !unresolved_refs.is_empty() {
-                println!("🔗 Resolving {} cross-references...", unresolved_refs.len());
-                let mut resolved_count = 0;
-                
-                for unresolved in unresolved_refs {
-                    // Try to find the symbol in the database
-                    // For now, we do a simple name-based lookup
-                    let matches = store.find_symbols_by_name(&unresolved.name)?;
-                    if let Some(target) = matches.first() {
-                        let edge = coderev::edge::Edge::new(
-                            unresolved.from_uri.clone(),
-                            target.uri.clone(),
-                            coderev::edge::EdgeKind::Calls,
-                        );
-                        store.insert_edge(&edge)?;
-                        resolved_count += 1;
-                    }
-                }
-                println!("✅ Resolved {} references.", resolved_count);
+            // Phase 2: Run Global Linker
+            if total_unresolved > 0 {
+                println!("\n🔗 Phase 2: Running Global Linker...");
+                let resolver = coderev::query::Resolver::new(&store)?;
+                let stats = resolver.resolve_all()?;
+                println!("{}", stats);
+            } else {
+                println!("\n✅ No unresolved references to resolve.");
             }
 
             println!("\n✅ Indexing complete!");
-            println!("📊 Total files: {}", total_files);
-            println!("🔢 Total symbols: {}", total_symbols);
             println!("🗄️  Database saved to: {:?}", database);
+            
+            // Show final stats
+            let final_stats = store.stats()?;
+            println!("{}", final_stats);
         }
 
         Commands::Search { query, database, limit, kind, vector } => {
@@ -389,6 +411,48 @@ fn main() -> anyhow::Result<()> {
             println!("📊 Coderev Statistics ({:?})", database);
             println!("------------------------------------");
             println!("{}", stats);
+        }
+
+        Commands::Resolve { database, verbose } => {
+            let store = SqliteStore::open(&database)?;
+            
+            let unresolved_count = store.count_unresolved()?;
+            if unresolved_count == 0 {
+                println!("✅ No unresolved references to resolve.");
+                return Ok(());
+            }
+            
+            println!("🔗 Running Global Linker on {} unresolved references...", unresolved_count);
+            
+            if verbose {
+                println!("\nUnresolved references:");
+                for unresolved in store.get_all_unresolved()? {
+                    println!("  - {} (from {} @ line {})", 
+                        unresolved.name, 
+                        unresolved.file_path,
+                        unresolved.line);
+                }
+                println!();
+            }
+            
+            let resolver = coderev::query::Resolver::new(&store)?;
+            let stats = resolver.resolve_all()?;
+            
+            println!("{}", stats);
+            
+            // Show remaining unresolved if verbose
+            if verbose {
+                let remaining = store.get_all_unresolved()?;
+                if !remaining.is_empty() {
+                    println!("\nRemaining unresolved:");
+                    for unresolved in remaining {
+                        println!("  ❌ {} (from {} @ line {})", 
+                            unresolved.name, 
+                            unresolved.file_path,
+                            unresolved.line);
+                    }
+                }
+            }
         }
     }
 

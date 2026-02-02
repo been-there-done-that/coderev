@@ -35,6 +35,21 @@ CREATE TABLE IF NOT EXISTS embeddings (
 )
 "#;
 
+/// SQL to create the unresolved_references table
+/// Stores call sites and references that need global resolution
+pub const CREATE_UNRESOLVED_REFERENCES_TABLE: &str = r#"
+CREATE TABLE IF NOT EXISTS unresolved_references (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    from_uri TEXT NOT NULL,
+    name TEXT NOT NULL,
+    receiver TEXT,
+    scope_id INTEGER NOT NULL,
+    file_path TEXT NOT NULL,
+    line INTEGER NOT NULL,
+    ref_kind TEXT NOT NULL DEFAULT 'call'
+)
+"#;
+
 /// SQL to create indexes
 pub const CREATE_INDEXES: &[&str] = &[
     "CREATE INDEX IF NOT EXISTS idx_symbols_path ON symbols(path)",
@@ -43,6 +58,8 @@ pub const CREATE_INDEXES: &[&str] = &[
     "CREATE INDEX IF NOT EXISTS idx_edges_from ON edges(from_uri)",
     "CREATE INDEX IF NOT EXISTS idx_edges_to ON edges(to_uri)",
     "CREATE INDEX IF NOT EXISTS idx_edges_kind ON edges(kind)",
+    "CREATE INDEX IF NOT EXISTS idx_unresolved_name ON unresolved_references(name)",
+    "CREATE INDEX IF NOT EXISTS idx_unresolved_file ON unresolved_references(file_path)",
 ];
 
 /// All schema creation statements
@@ -51,6 +68,7 @@ pub fn all_schema_statements() -> Vec<&'static str> {
         CREATE_SYMBOLS_TABLE,
         CREATE_EDGES_TABLE,
         CREATE_EMBEDDINGS_TABLE,
+        CREATE_UNRESOLVED_REFERENCES_TABLE,
     ];
     stmts.extend(CREATE_INDEXES.iter().copied());
     stmts
