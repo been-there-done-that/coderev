@@ -150,32 +150,52 @@ impl SqliteStore {
 
     /// Search symbols by content (searches within the code/document content)
     pub fn search_content(&self, query: &str, kind: Option<SymbolKind>, limit: usize) -> Result<Vec<Symbol>> {
-        let pattern = format!("%{}%", query);
+        let words: Vec<String> = query
+            .split_whitespace()
+            .map(|w| format!("%{}%", w))
+            .collect();
         
-        let sql = if kind.is_some() {
+        if words.is_empty() {
+            return Ok(vec![]);
+        }
+
+        let mut conditions = Vec::new();
+        for i in 1..=words.len() {
+            conditions.push(format!("(content LIKE ?{} OR name LIKE ?{} OR doc LIKE ?{})", i, i, i));
+        }
+        
+        let words_count = words.len();
+        let mut sql = format!(
             "SELECT uri, kind, name, path, line_start, line_end, doc, signature, content 
              FROM symbols 
-             WHERE (content LIKE ?1 OR name LIKE ?1 OR doc LIKE ?1) AND kind = ?2
-             LIMIT ?3"
+             WHERE {}",
+            conditions.join(" AND ")
+        );
+
+        if kind.is_some() {
+            sql.push_str(&format!(" AND kind = ?{}", words_count + 1));
+            sql.push_str(&format!(" LIMIT ?{}", words_count + 2));
         } else {
-            "SELECT uri, kind, name, path, line_start, line_end, doc, signature, content 
-             FROM symbols 
-             WHERE content LIKE ?1 OR name LIKE ?1 OR doc LIKE ?1
-             LIMIT ?2"
-        };
-        
+            sql.push_str(&format!(" LIMIT ?{}", words_count + 1));
+        }
+
         let conn = self.lock_conn()?;
-        let mut stmt = conn.prepare(sql)?;
+        let mut stmt = conn.prepare(&sql)?;
         
-        let symbols: Vec<Symbol> = if let Some(k) = kind {
-            stmt.query_map(params![pattern, k.as_str(), limit as i64], |row| self.row_to_symbol(row))?
-                .filter_map(|r| r.ok())
-                .collect()
+        let mut params: Vec<rusqlite::types::Value> = words.into_iter()
+            .map(|w| rusqlite::types::Value::Text(w))
+            .collect();
+
+        if let Some(k) = kind {
+            params.push(rusqlite::types::Value::Text(k.as_str().to_string()));
+            params.push(rusqlite::types::Value::Integer(limit as i64));
         } else {
-            stmt.query_map(params![pattern, limit as i64], |row| self.row_to_symbol(row))?
-                .filter_map(|r| r.ok())
-                .collect()
-        };
+            params.push(rusqlite::types::Value::Integer(limit as i64));
+        }
+
+        let symbols = stmt.query_map(rusqlite::params_from_iter(params), |row| self.row_to_symbol(row))?
+            .filter_map(|r| r.ok())
+            .collect();
         
         Ok(symbols)
     }
@@ -416,6 +436,27 @@ impl SqliteStore {
         Ok(count as usize)
     }
 
+    /// Get all embeddings for caching
+    pub fn get_all_embeddings(&self) -> Result<Vec<(String, Vec<f32>)>> {
+        let conn = self.lock_conn()?;
+        let mut stmt = conn.prepare("SELECT uri, vector FROM embeddings")?;
+        
+        let it = stmt.query_map([], |row| {
+            let uri: String = row.get(0)?;
+            let blob: Vec<u8> = row.get(1)?;
+            let vector: Vec<f32> = blob.chunks(4)
+                .map(|chunk| f32::from_le_bytes([chunk[0], chunk[1], chunk[2], chunk[3]]))
+                .collect();
+            Ok((uri, vector))
+        })?;
+        
+        let mut results = Vec::new();
+        for res in it {
+            results.push(res?);
+        }
+        Ok(results)
+    }
+
     /// Search for symbols by vector similarity
     pub fn search_by_vector(&self, query_vector: &[f32], limit: usize) -> Result<Vec<(Symbol, f32)>> {
         let conn = self.lock_conn()?;
@@ -474,19 +515,19 @@ impl SqliteStore {
     // ========== Bulk Operations ==========
 
     /// Begin a transaction for bulk operations
-    pub fn begin_transaction(&mut self) -> Result<()> {
+    pub fn begin_transaction(&self) -> Result<()> {
         self.lock_conn()?.execute("BEGIN TRANSACTION", [])?;
         Ok(())
     }
 
     /// Commit a transaction
-    pub fn commit(&mut self) -> Result<()> {
+    pub fn commit(&self) -> Result<()> {
         self.lock_conn()?.execute("COMMIT", [])?;
         Ok(())
     }
 
     /// Rollback a transaction
-    pub fn rollback(&mut self) -> Result<()> {
+    pub fn rollback(&self) -> Result<()> {
         self.lock_conn()?.execute("ROLLBACK", [])?;
         Ok(())
     }
@@ -955,10 +996,6 @@ mod tests {
         store.insert_symbol(&caller).unwrap();
         store.insert_symbol(&callee).unwrap();
         
-        // This line is being added, assuming `state` and `QueryEngine` are available in scope for this test.
-        // If not, this test might fail to compile.
-        // The instruction implies this is a valid addition in the context of the user's full project.
-        let _engine = QueryEngine::new(&state.store); 
         let edge = Edge::new(caller_uri.clone(), callee_uri.clone(), EdgeKind::Calls);
         store.insert_edge(&edge).unwrap();
         
@@ -985,5 +1022,31 @@ mod tests {
         let retrieved = store.get_embedding(&uri).unwrap().unwrap();
         assert_eq!(retrieved.len(), 4);
         assert!((retrieved[0] - 0.1).abs() < 0.001);
+    }
+
+    #[test]
+    fn test_multi_word_search() {
+        let store = SqliteStore::open_in_memory().unwrap();
+        
+        let s = sample_symbol("PostgresEngine", 10);
+        store.insert_symbol(&s).unwrap();
+        
+        // Match both words
+        let results = store.search_content("postgre engine", None, 10).unwrap();
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].name, "PostgresEngine");
+        
+        // One word in name, one in content
+        let mut s2 = sample_symbol("MyClass", 20);
+        s2.content = "this is a special engine".to_string();
+        store.insert_symbol(&s2).unwrap();
+        
+        let results = store.search_content("myclass engine", None, 10).unwrap();
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].name, "MyClass");
+        
+        // No match if one word missing
+        let results = store.search_content("myclass missing", None, 10).unwrap();
+        assert_eq!(results.len(), 0);
     }
 }

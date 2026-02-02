@@ -58,6 +58,26 @@ impl EmbeddingEngine {
 
     /// Generate embedding for a call site
     pub fn embed_call_site(&self, caller_name: &str, context: &str, imports: &[String]) -> Result<Vec<f32>> {
+        let text = self.format_call_site(caller_name, context, imports);
+        self.embed_query(&text)
+    }
+
+    /// Generate embeddings for a batch of call sites
+    pub fn embed_call_sites(&self, batch: Vec<(String, String, Vec<String>)>) -> Result<Vec<Vec<f32>>> {
+        if batch.is_empty() {
+            return Ok(vec![]);
+        }
+        let inputs: Vec<String> = batch.into_iter()
+            .map(|(name, ctx, imps)| self.format_call_site(&name, &ctx, &imps))
+            .collect();
+        
+        let embeddings = self.model.embed(inputs, None)
+            .map_err(|e| crate::Error::Adapter(format!("Batch call site embedding failed: {}", e)))?;
+        
+        Ok(embeddings)
+    }
+
+    fn format_call_site(&self, caller_name: &str, context: &str, imports: &[String]) -> String {
         let mut text = format!("Caller: {}\n", caller_name);
         if !context.is_empty() {
              text.push_str(&format!("Context: {}\n", context));
@@ -65,8 +85,7 @@ impl EmbeddingEngine {
         if !imports.is_empty() {
             text.push_str(&format!("Imports: {}\n", imports.join(", ")));
         }
-        
-        self.embed_query(&text)
+        text
     }
 }
 

@@ -37,105 +37,107 @@ impl<'a> SemanticLinker<'a> {
         let mut resolved = 0;
         let mut candidates_count = 0;
 
-        for (i, ref_item) in unresolved.into_iter().enumerate() {
-            if i % 10 == 0 {
-                print!("\r   Progress: {}/{} references", i + 1, total);
-                std::io::stdout().flush().ok();
+        // Filter out external and identify what needs embedding
+        let targets: Vec<PersistedUnresolvedReference> = unresolved.into_iter()
+            .filter(|r| !r.is_external)
+            .collect();
+        
+        if targets.is_empty() {
+            return Ok(SemanticLinkerStats { resolved: 0, candidates: 0, total });
+        }
+
+        // Phase 1: Cache ALL symbol embeddings in memory
+        println!("   Caching symbol embeddings...");
+        let symbol_embeddings = self.store.get_all_embeddings()?;
+        let cached_symbols: Vec<(SymbolUri, Vec<f32>)> = symbol_embeddings.into_iter()
+            .filter_map(|(uri_str, vec)| {
+                SymbolUri::parse(&uri_str).ok().map(|uri| (uri, vec))
+            })
+            .collect();
+
+        // Phase 2: Batch process targets
+        let batch_size = 32;
+        for chunk in targets.chunks(batch_size) {
+            // 1. Prepare batch for embedding
+            let mut batch_data = Vec::with_capacity(chunk.len());
+            for ref_item in chunk {
+                let context = self.get_context(ref_item)?;
+                let imports = self.store.get_imports_for_file(&ref_item.file_path)?;
+                let import_strings: Vec<String> = imports.iter().map(|i| format!("{} as {}", i.target_namespace, i.alias.as_deref().unwrap_or("*"))).collect();
+                batch_data.push((ref_item.name.clone(), context, import_strings));
             }
 
-            // Skip external references
-            if ref_item.is_external {
-                continue;
-            }
-            
-            // Check if we already have a deterministic edge for this call
-            // We can approximate this by checking if any 'Calls' edge exists from this source
-            // But we don't know the exact target if it's unresolved.
-            // However, Phase 2 Global Linker inserts edges. If an edge exists, we might want to skip.
-            // But unresolved_references are NOT removed by Phase 2.
-            // So we need to check if the reference is truly unresolved.
-            // Phase 2 *should* have removed it from `unresolved_references` table if it resolved it?
-            // Wait, looking at Global Linker:
-            // It does NOT remove from unresolved_references. It just inserts edges.
-            // And stores ambiguous references in ambiguous_references table.
-            
-            // To avoid duplicate work/edges, we should check if there are outgoing edges from this call site?
-            // The call site is identified by (file, line, name).
-            // `edges` table links `from_uri` -> `to_uri`.
-            // `from_uri` is the caller (e.g. function).
-            // If the caller calls multiple things, we have multiple edges.
-            // We can't easily know which edge corresponds to which call site without more metadata.
-            
-            // However, the prompt says: "Phase 3 NEVER overwrites Phase 2."
-            // Meaning if Phase 2 resolved it (confidence 1.0), we shouldn't degrade it.
-            // But if Phase 2 failed (no edge, or ambiguous), we help.
-            
-            // How do we know if Phase 2 resolved it?
-            // We can check if `ambiguous_references` has entries for this `ref_item.id`.
-            // If so, it's ambiguous.
-            // If not, and no edge exists? 
-            
-            // A simple heuristic:
-            // If we find a high-confidence semantic match, we add it.
-            // If a static edge already exists to the SAME target, we do nothing (or db handles unique constraint).
-            // IF a static edge exists to a DIFFERENT target, we add ours as probabilistic.
-            // If no edge exists, we add ours.
+            // 2. Embed batch
+            let vectors = self.embedding_engine.embed_call_sites(batch_data)?;
 
-            // 1. Generate embedding for call site
-            let context = self.get_context(&ref_item)?;
-            let imports = self.store.get_imports_for_file(&ref_item.file_path)?;
-            let import_strings: Vec<String> = imports.iter().map(|i| format!("{} as {}", i.target_namespace, i.alias.as_deref().unwrap_or("*"))).collect();
-            
-            let vector = self.embedding_engine.embed_call_site(
-                &ref_item.name,
-                &context,
-                &import_strings
-            )?;
+            // 3. Process each vector and find matches in cache
+            self.store.begin_transaction()?;
+            for (i, vector) in vectors.into_iter().enumerate() {
+                let ref_item = &chunk[i];
+                
+                // Store call site embedding
+                self.store.insert_callsite_embedding(ref_item.id, &vector)?;
 
-            // Store callsite embedding
-            self.store.insert_callsite_embedding(ref_item.id, &vector)?;
+                // 4. In-memory similarity search
+                let mut matches = Vec::new();
+                for (sym_uri, sym_vec) in &cached_symbols {
+                    let score = self.cosine_similarity(&vector, sym_vec);
+                    if score >= self.threshold {
+                        matches.push((sym_uri, score));
+                    }
+                }
 
-            // Search
-            let results = self.store.search_by_vector(&vector, 5)?; // Top 5
-            
-            for (symbol, score) in results {
-                if score >= self.threshold {
-                    // Create probabilistic edge
+                // Sort and take top 5
+                matches.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+                
+                for (sym_uri, score) in matches.into_iter().take(5) {
                     let edge = Edge::with_confidence(
                         SymbolUri::parse(&ref_item.from_uri)?,
-                        symbol.uri,
+                        sym_uri.clone(),
                         EdgeKind::Calls,
                         score
                     );
-                    
-                    // We rely on SQLite INSERT OR REPLACE (or IGNORE) to handle duplicates.
-                    // But wait, our schema has UNIQUE(from, to, kind).
-                    // If we try to insert a prob edge (0.8) but a static edge (1.0) exists for same (from, to),
-                    // INSERT OR REPLACE will OVERWRITE 1.0 with 0.8 ! That is bad.
-                    // We must NOT overwrite higher confidence edges.
-                    
-                    // Logic: Check if edge exists.
+
+                    // Check if edge exists
                     let edges = self.store.get_edges_from(&edge.from_uri)?;
                     let existing = edges.iter().find(|e| e.to_uri == edge.to_uri && e.kind == edge.kind);
                     
                     if let Some(existing_edge) = existing {
                         if existing_edge.confidence >= edge.confidence {
-                            // Keep existing higher/equal confidence edge
                             continue;
                         }
                     }
                     
                     self.store.insert_edge(&edge)?;
                     resolved += 1;
+                    candidates_count += 1;
                 }
-                candidates_count += 1;
             }
+            self.store.commit()?;
+            
+            print!("\r   Progress: {} processed, {} resolved", candidates_count, resolved);
+            std::io::stdout().flush().ok();
         }
 
-        println!("\r   Progress: {}/{} references", total, total);
+        println!("\n✅ Semantic Resolver complete.");
         Ok(SemanticLinkerStats { resolved, candidates: candidates_count, total })
     }
     
+    fn cosine_similarity(&self, a: &[f32], b: &[f32]) -> f32 {
+        if a.len() != b.len() || a.is_empty() {
+            return 0.0;
+        }
+        let dot_product: f32 = a.iter().zip(b.iter()).map(|(x, y)| x * y).sum();
+        let norm_a: f32 = a.iter().map(|x| x * x).sum::<f32>().sqrt();
+        let norm_b: f32 = b.iter().map(|x| x * x).sum::<f32>().sqrt();
+        
+        if norm_a == 0.0 || norm_b == 0.0 {
+            0.0
+        } else {
+            dot_product / (norm_a * norm_b)
+        }
+    }
+
     fn get_context(&self, ref_item: &PersistedUnresolvedReference) -> Result<String> {
         if let Ok(content) = std::fs::read_to_string(&ref_item.file_path) {
             let lines: Vec<&str> = content.lines().collect();

@@ -205,7 +205,7 @@ async fn main() -> anyhow::Result<()> {
                     .unwrap_or_else(|| "unknown".to_string())
             });
             
-            let mut store = SqliteStore::open(&database)?;
+            let store = SqliteStore::open(&database)?;
             let registry = adapter::default_registry();
             let chunker = adapter::DocumentChunker::new();
             let mut stats = IndexingStats::default();
@@ -452,7 +452,7 @@ async fn main() -> anyhow::Result<()> {
         }
 
         Commands::Search { query, database, limit, kind, vector } => {
-            let mut store = SqliteStore::open(&database)?;
+            let store = SqliteStore::open(&database)?;
             
             let parsed_kind = if let Some(ref k) = kind {
                 use std::str::FromStr;
@@ -463,7 +463,7 @@ async fn main() -> anyhow::Result<()> {
 
             let results = if vector {
                 // Ensure embeddings exist before searching
-                ensure_embeddings(&mut store)?;
+                ensure_embeddings(&store)?;
                 
                 println!("🧠 [Local Embedding] Searching for: '{}'...", query);
                 let engine = QueryEngine::new(&store);
@@ -494,8 +494,8 @@ async fn main() -> anyhow::Result<()> {
         }
 
         Commands::Embed { database, model: _ } => {
-            let mut store = SqliteStore::open(&database)?;
-            ensure_embeddings(&mut store)?;
+            let store = SqliteStore::open(&database)?;
+            ensure_embeddings(&store)?;
             println!("✅ Embedding complete!");
         }
 
@@ -573,7 +573,7 @@ async fn main() -> anyhow::Result<()> {
         }
 
         Commands::Resolve { database, verbose } => {
-            let mut store = SqliteStore::open(&database)?;
+            let store = SqliteStore::open(&database)?;
             
             let unresolved_count = store.count_unresolved()?;
 
@@ -602,7 +602,7 @@ async fn main() -> anyhow::Result<()> {
 
             // Run Semantic Resolver
             println!("\n🧠 Running Semantic Resolver...");
-            ensure_embeddings(&mut store)?;
+            ensure_embeddings(&store)?;
             
             let engine = coderev::query::EmbeddingEngine::new()?;
             let semantic_linker = coderev::linker::SemanticLinker::new(&store, &engine);
@@ -650,7 +650,7 @@ async fn main() -> anyhow::Result<()> {
 }
 
 /// Helper to ensure all symbols have embeddings
-fn ensure_embeddings(store: &mut SqliteStore) -> anyhow::Result<()> {
+fn ensure_embeddings(store: &SqliteStore) -> anyhow::Result<()> {
     let missing = store.find_symbols_without_embeddings()?;
     if !missing.is_empty() {
         println!("🧠 On-demand: Generating embeddings for {} symbols...", missing.len());

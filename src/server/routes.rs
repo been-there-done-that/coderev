@@ -47,13 +47,21 @@ pub async fn handle_search(
     let engine = QueryEngine::new(&state.store);
     
     let results = if vector {
-        // Assume embeddings are handled or would throw error
-        // Simplified for this phase
-        Ok(vec![])
+        let embedding_engine = crate::query::EmbeddingEngine::new()
+            .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, Json(ErrorResponse { error: format!("Failed to initialize embedding engine: {}", e) })))?;
+        
+        let query_vector = embedding_engine.embed_query(&params.query)
+            .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, Json(ErrorResponse { error: format!("Failed to embed query: {}", e) })))?;
+        
+        engine.search_by_vector(&query_vector, limit)
+            .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, Json(ErrorResponse { error: e.to_string() })))?
+            .into_iter()
+            .map(|r| r.symbol)
+            .collect()
     } else {
         state.store.search_content(&params.query, kind, limit)
-            .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, Json(ErrorResponse { error: e.to_string() })))
-    }?;
+            .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, Json(ErrorResponse { error: e.to_string() })))?
+    };
 
     Ok(Json(serde_json::to_value(&results).unwrap()))
 }
