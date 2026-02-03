@@ -24,6 +24,29 @@ Coderev isn’t “just another semantic search.” It’s **graph‑grounded re
 - **Local‑first + deterministic**: You can inspect and trust the substrate.
 
 See `WHY_Coderev.md` for a concise positioning and benchmark highlights.
+See `docs/launch.md` for a one‑page launch note you can share.
+
+---
+
+## Try Coderev
+
+1. Index your repo:
+```bash
+coderev index --path /path/to/your/project
+```
+
+2. Ask real questions:
+```bash
+coderev search --query "where is auth handled?"
+coderev callers --uri "codescope://my-repo/src/auth.py#callable:validate_login@10"
+```
+
+3. (Optional) Start the MCP server:
+```bash
+coderev mcp --database .coderev/coderev.db
+```
+
+If this saves you time, open an issue and tell us what worked and what didn’t.
 
 ---
 
@@ -45,16 +68,22 @@ See `WHY_Coderev.md` for a concise positioning and benchmark highlights.
 
 ## Quick Start
 
-### 1) Index a repository
+### 1) Build release binary
 
 ```bash
-cargo run -- index --path /path/to/your/project --database coderev.db
+cargo build --release
 ```
 
-### 1.5) Optional: create a config file
+### 2) Index a repository
 
 ```bash
-cargo run -- init --path /path/to/your/project
+target/release/coderev index --path /path/to/your/project
+```
+
+### 2.5) Optional: create a config file
+
+```bash
+target/release/coderev init --path /path/to/your/project
 ```
 
 This writes `coderev.toml` so you can omit `--path` and `--database` later.  
@@ -74,16 +103,33 @@ By default the database is stored at `.coderev/coderev.db`, and `.coderev/` is a
 ./install.ps1
 ```
 
-### 2) Search semantically
+### Cargo (local install)
 
 ```bash
-cargo run -- search --query "how does auth work?"
+cargo install --path .
 ```
 
-### 3) Trace callers / callees
+Update after changes:
 
 ```bash
-cargo run -- callers --uri "codescope://my-repo/src/auth.py#callable:validate_login@10"
+cargo install --path . --force
+```
+
+### Dev vs Release
+
+- **Dev**: `cargo run -- <args>` (fast iteration, slower runtime)
+- **Release**: `target/release/coderev <args>` or `cargo install --path .` (optimized, for real usage)
+
+### 3) Search semantically
+
+```bash
+target/release/coderev search --query "how does auth work?"
+```
+
+### 4) Trace callers / callees
+
+```bash
+target/release/coderev callers --uri "codescope://my-repo/src/auth.py#callable:validate_login@10"
 ```
 
 ---
@@ -163,7 +209,7 @@ path = "."
 Generate MCP config scaffolding for agents:
 
 ```bash
-cargo run -- agent-setup --path /path/to/your/project
+target/release/coderev agent-setup --path /path/to/your/project
 ```
 
 This writes `.coderev/mcp.json` pointing to `coderev mcp --database .coderev/coderev.db`.
@@ -175,7 +221,7 @@ This writes `.coderev/mcp.json` pointing to `coderev mcp --database .coderev/cod
 Coderev implements the **Model Context Protocol (MCP)** so AI agents can query your codebase directly.
 
 ```bash
-cargo run -- mcp --database coderev.db
+target/release/coderev mcp --database .coderev/coderev.db
 ```
 
 MCP tools include:
@@ -191,7 +237,7 @@ MCP tools include:
 Run the local UI + API server:
 
 ```bash
-cargo run -- serve --database coderev.db
+target/release/coderev serve --database .coderev/coderev.db
 ```
 
 UI assets live in `ui/` and are served by the backend when built.
@@ -203,14 +249,14 @@ UI assets live in `ui/` and are served by the backend when built.
 Run in the background:
 
 ```bash
-cargo run -- watch --background
+target/release/coderev watch --background
 ```
 
 Check status / stop:
 
 ```bash
-cargo run -- watch --status
-cargo run -- watch --stop
+target/release/coderev watch --status
+target/release/coderev watch --stop
 ```
 
 Daemon state lives in `.coderev/` (`coderev-watch.pid`, `coderev-watch.log`).
@@ -222,6 +268,8 @@ Daemon state lives in `.coderev/` (`coderev-watch.pid`, `coderev-watch.log`).
 Reproducible benchmark suite (Coderev vs coderev vs rg vs RAG):
 
 ```bash
+git clean -fdx  # optional: for a clean run
+cargo build --release
 bench/run_all.sh
 python3 bench/report.py
 ```

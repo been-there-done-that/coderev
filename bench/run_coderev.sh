@@ -18,7 +18,7 @@ for q in queries:
     out = os.path.join(out_dir, f"coderev_{q['id']}.json")
     time_out = os.path.join(out_dir, f"coderev_{q['id']}.time")
     cmd = [
-        'cargo','run','--','search','--query',q['query'],'--database',db,'--json'
+        'target/release/coderev','search','--query',q['query'],'--database',db,'--json'
     ]
     with open(out, 'w') as f_out, open(time_out, 'w') as f_time:
         subprocess.run(['/usr/bin/time','-p',*cmd], stdout=f_out, stderr=f_time, check=False)

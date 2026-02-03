@@ -9,7 +9,8 @@ Evaluate whether Coderev improves *LLM‑ready retrieval* versus coderev, ripgre
 
 1) **Index Coderev** (local DB in `.coderev/`):
 ```bash
-cargo run -- index --path . --database .coderev/bench_coderev.db --json
+cargo build --release
+target/release/coderev index --path . --database .coderev/bench_coderev.db --json
 ```
 
 2) **Ensure coderev index exists** (already configured in `.coderev/config.yaml`).

@@ -161,10 +161,55 @@ impl<'a> GlobalLinker<'a> {
             // --- Step 3: Global Resolution ---
              if matched_uri.is_none() && candidates.is_empty() {
                  let global_matches = self.store.find_symbols_by_name(&ref_item.name)?;
-                 if global_matches.len() == 1 {
-                      matched_uri = Some(global_matches[0].uri.clone());
-                 } else if global_matches.len() > 1 {
-                      for sym in global_matches { candidates.insert(sym.uri); }
+                 
+                 // If we have a receiver (e.g., Type in Type::method), try to filter global matches by that parent
+                 if let Some(ref recv) = ref_item.receiver {
+                     // Try to resolve the receiver globally first
+                     let receiver_matches = self.store.find_symbols_by_name(recv)?;
+                     
+                     // If we found the receiver (e.g. the struct "Type"), check if any of our candidate methods belong to it
+                     let mut filtered_candidates = Vec::new();
+                     for method_sym in &global_matches {
+                         // We need to check if method_sym is a child of any receiver_match
+                         // Since we don't have "parent" pointer in Symbol, we check "Contains" edges FROM receiver TO method
+                         // But that might be slow to do for all.
+                         // Optimization: Check path? 
+                         // Or: Check if method_sym has an incoming "Contains" edge from one of the receiver_matches.
+                         
+                         let incoming = self.store.get_edges_to(&method_sym.uri)?;
+                         let incoming_contains = incoming.iter().filter(|e| e.kind == EdgeKind::Contains);
+                         for edge in incoming_contains {
+                             for recv_sym in &receiver_matches {
+                                 if edge.from_uri == recv_sym.uri {
+                                     filtered_candidates.push(method_sym.clone());
+                                     break;
+                                 }
+                             }
+                         }
+                     }
+                     
+                     if filtered_candidates.len() == 1 {
+                         matched_uri = Some(filtered_candidates[0].uri.clone());
+                         // Clear other candidates as we found a specific one
+                         candidates.clear();
+                     } else if !filtered_candidates.is_empty() {
+                         // We narrowed it down, but still ambiguous (e.g. multiple "Type" structs?)
+                         for sym in filtered_candidates { candidates.insert(sym.uri); }
+                     } else {
+                         // Receiver filtering didn't help (maybe receiver not found or no relation), fallback to raw name matches
+                         if global_matches.len() == 1 {
+                              matched_uri = Some(global_matches[0].uri.clone());
+                         } else if global_matches.len() > 1 {
+                              for sym in global_matches { candidates.insert(sym.uri); }
+                         }
+                     }
+                 } else {
+                     // No receiver, standard name match
+                     if global_matches.len() == 1 {
+                          matched_uri = Some(global_matches[0].uri.clone());
+                     } else if global_matches.len() > 1 {
+                          for sym in global_matches { candidates.insert(sym.uri); }
+                     }
                  }
              }
 
