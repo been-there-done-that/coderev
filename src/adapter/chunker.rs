@@ -154,7 +154,8 @@ impl DocumentChunker {
                     }
                     
                     current_chunk = current_chunk[overlap_start..].to_string();
-                    chunk_start_line = chunk_start_line + chunk_lines - (current_chunk.lines().count() as u32);
+                    // Calculate start line of the new overlapping chunk based on the current line we are at
+                    chunk_start_line = current_line.saturating_sub(current_chunk.lines().count() as u32).saturating_add(1);
                 } else {
                     // No good break point, force split
                     chunks.push(Chunk {

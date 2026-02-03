@@ -30,8 +30,7 @@
 (type_declaration
   (type_spec
     name: (type_identifier) @container.name
-    type: (interface_type
-      (method_spec_list)? @container.body))) @container.def
+    type: (interface_type) @container.body)) @container.def
 
 ; Type aliases
 (type_declaration
@@ -82,9 +81,8 @@
 ; ============ INTERFACE EMBEDDING ============
 
 ; Embedded interface
-(interface_type
-  (method_spec_list
-    (type_identifier) @inherits.base))
+; (interface_type
+;   (type_identifier) @inherits.base)
 
 ; Struct embedding
 (struct_type

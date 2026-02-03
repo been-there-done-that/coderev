@@ -32,8 +32,34 @@ cargo run -- search --query "how does auth work?" --vector
 #### Graph Analysis
 Find actual callers of a function (verified by the graph, not just grep).
 ```bash
-cargo run -- callers --uri "codescope://my-repo/src/auth.py#callable:validate_login@10"
+cargo run -- trace callers --uri "codescope://my-repo/src/auth.py#callable:validate_login@10"
 ```
+
+---
+
+## 🤖 AI Agent Integration (MCP)
+
+Coderev implements the **Model Context Protocol (MCP)**, allowing AI agents (like Claude Desktop or Cursor) to directly query your codebase.
+
+### Run the MCP Server
+```bash
+cargo run -- mcp
+```
+Configure your agent to use this command as an MCP server. The agent will gain access to:
+- `search_code`: Find relevant code by concept.
+- `get_callers` / `get_callees`: Navigate the call graph.
+- `get_impact`: Analyze change impact.
+
+---
+
+## ⚡️ Real-time Indexing
+
+Keep your index fresh automatically with the watcher daemon.
+
+```bash
+cargo run -- watch --path /path/to/your/project
+```
+This listens for file changes and incrementally updates the graph, so your AI always has the latest context.
 
 ---
 
@@ -47,6 +73,8 @@ Coderev is what code search looks like when built by compiler engineers.
 | **Search** | Vector guessing | Vector over verified symbols |
 | **Logic** | None | Real call graphs & reachability |
 | **Reliability** | "Hallucinates" relationships | Verified symbol relationships |
+| **AI Protocol** | Custom | **Standard MCP** |
+| **Updates** | Manual | **Live Watcher** |
 
 ---
 
@@ -69,9 +97,12 @@ Coderev isn't just a search tool; it's a foundation for other tools. Because it 
 | Command | Purpose |
 | :--- | :--- |
 | `index` | **Primary Entry**: Full pipeline (parse → link → embed). |
+| `watch` | **Live Mode**: Incrementally update index on file changes. |
 | `search` | Find code via keywords or semantic meaning. |
-| `callers` | List all functions that call a specific symbol. |
-| `impact` | Analyze the downstream dependencies (blast radius) of a change. |
+| `trace` | Analyze `callers` or `callees` of a symbol. |
+| `impact` | Analyze dependencies (blast radius) of a change. |
+| `mcp` | Start Standard MCP server for AI agents. |
+| `serve` | Start HTTP server for the UI. |
 | `stats` | Show graph density and language distribution. |
 
 ---

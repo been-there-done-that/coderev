@@ -1,42 +1,39 @@
-# sv
+# Coderev UI
 
-Everything you need to build a Svelte project, powered by [`sv`](https://github.com/sveltejs/cli).
+The web interface for interacting with the Universal Code Intelligence Substrate (Coderev).
 
-## Creating a project
+## Connection to Backend
 
-If you're seeing this, you've probably already done this step. Congrats!
+This UI is served by the Coderev backend via the `serve` command.
 
+```bash
+# From the backend directory
+cargo run -- serve
+```
+This starts both the API and the UI (if built and placed in the static dir).
+
+## Development
+
+If you are developing the UI separately:
+
+### Prerequisites
+- Node.js & npm/pnpm
+
+### Install Dependencies
 ```sh
-# create a new project
-npx sv create my-app
+npm install
 ```
 
-To recreate this project with the same configuration:
-
-```sh
-# recreate this project
-pnpm dlx sv create --template minimal --types ts --add prettier eslint tailwindcss="plugins:typography,forms" sveltekit-adapter="adapter:static" devtools-json --install pnpm ui
-```
-
-## Developing
-
-Once you've created a project and installed dependencies with `npm install` (or `pnpm install` or `yarn`), start a development server:
-
+### Dev Server
+To run the SvelteKit development server:
 ```sh
 npm run dev
-
-# or start the server and open the app in a new browser tab
-npm run dev -- --open
 ```
 
-## Building
-
-To create a production version of your app:
-
+### Build for Production
+To build the UI assets for embedding in the Rust backend:
 ```sh
 npm run build
 ```
+This produces the static assets needed for the `serve` command.
 
-You can preview the production build with `npm run preview`.
-
-> To deploy your app, you may need to install an [adapter](https://svelte.dev/docs/kit/adapters) for your target environment.

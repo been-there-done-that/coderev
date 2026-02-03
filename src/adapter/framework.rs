@@ -125,11 +125,13 @@ pub fn default_registry() -> AdapterRegistry {
     if let Ok(adapter) = super::query_adapter::QueryAdapter::javascript() {
         registry.register(adapter);
     }
-    if let Ok(adapter) = super::query_adapter::QueryAdapter::rust() {
-        registry.register(adapter);
+    match super::query_adapter::QueryAdapter::rust() {
+        Ok(adapter) => registry.register(adapter),
+        Err(e) => eprintln!("❌ Failed to register Rust adapter: {}", e),
     }
-    if let Ok(adapter) = super::query_adapter::QueryAdapter::go() {
-        registry.register(adapter);
+    match super::query_adapter::QueryAdapter::go() {
+        Ok(adapter) => registry.register(adapter),
+        Err(e) => eprintln!("❌ Failed to register Go adapter: {}", e),
     }
     
     registry
