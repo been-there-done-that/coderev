@@ -21,6 +21,7 @@ pub mod linker;
 pub mod server;
 pub mod watcher;
 pub mod output;
+pub mod config;
 
 
 // Re-exports for convenient access

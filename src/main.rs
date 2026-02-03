@@ -7,6 +7,7 @@ use coderev::storage::SqliteStore;
 use coderev::adapter;
 use coderev::query::QueryEngine;
 use coderev::{SymbolKind, IndexMessage, FileStatus};
+use coderev::config::{self, CoderevConfig};
 use tracing_subscriber::{fmt, prelude::*, EnvFilter};
 use std::io::Write;
 
@@ -42,6 +43,10 @@ struct Cli {
     /// Emit TOON JSON output (because yes)
     #[arg(long, global = true)]
     toon: bool,
+
+    /// Path to config file (default: ./coderev.toml)
+    #[arg(long, global = true)]
+    config: Option<PathBuf>,
 
     #[command(subcommand)]
     command: Commands,
@@ -368,15 +373,56 @@ fn symbol_ref_compact(symbol: &coderev::Symbol) -> SymbolRefCompact {
 
 #[derive(Subcommand)]
 enum Commands {
+    /// Initialize a Coderev config file in the current directory
+    Init {
+        /// Path to repository (defaults to current directory)
+        #[arg(short, long)]
+        path: Option<PathBuf>,
+
+        /// Path to the database file
+        #[arg(short, long)]
+        database: Option<PathBuf>,
+
+        /// Repository name (defaults to directory name)
+        #[arg(short, long)]
+        repo: Option<String>,
+
+        /// Path to config file (default: ./coderev.toml)
+        #[arg(long)]
+        config: Option<PathBuf>,
+
+        /// Overwrite existing config
+        #[arg(long)]
+        force: bool,
+    },
+
+    /// Generate MCP config scaffolding for agents
+    AgentSetup {
+        /// Path to repository (defaults to current directory)
+        #[arg(short, long)]
+        path: Option<PathBuf>,
+
+        /// Path to the database file
+        #[arg(short, long)]
+        database: Option<PathBuf>,
+
+        /// Output path for MCP config (default: .coderev/mcp.json)
+        #[arg(short, long)]
+        output: Option<PathBuf>,
+
+        /// Overwrite existing file
+        #[arg(long)]
+        force: bool,
+    },
     /// Index a repository or directory
     Index {
         /// Path to the repository or directory to index
         #[arg(short, long)]
-        path: PathBuf,
+        path: Option<PathBuf>,
 
         /// Path to the database file
-        #[arg(short, long, default_value = "coderev.db")]
-        database: PathBuf,
+        #[arg(short, long)]
+        database: Option<PathBuf>,
 
         /// Repository name (defaults to directory name)
         #[arg(short, long)]
@@ -390,8 +436,8 @@ enum Commands {
         query: String,
 
         /// Path to the database file
-        #[arg(short, long, default_value = "coderev.db")]
-        database: PathBuf,
+        #[arg(short, long)]
+        database: Option<PathBuf>,
 
         /// Maximum number of results
         #[arg(short, long, default_value = "10")]
@@ -409,8 +455,8 @@ enum Commands {
     /// Generate embeddings for symbols
     Embed {
         /// Path to the database file
-        #[arg(short, long, default_value = "coderev.db")]
-        database: PathBuf,
+        #[arg(short, long)]
+        database: Option<PathBuf>,
 
         /// Model name (placeholder for now)
         #[arg(short, long, default_value = "all-MiniLM-L6-v2")]
@@ -424,8 +470,8 @@ enum Commands {
         uri: String,
 
         /// Path to the database file
-        #[arg(short, long, default_value = "coderev.db")]
-        database: PathBuf,
+        #[arg(short, long)]
+        database: Option<PathBuf>,
 
         /// Maximum depth for transitive callers
         #[arg(long, default_value = "1")]
@@ -439,8 +485,8 @@ enum Commands {
         uri: String,
 
         /// Path to the database file
-        #[arg(short, long, default_value = "coderev.db")]
-        database: PathBuf,
+        #[arg(short, long)]
+        database: Option<PathBuf>,
 
         /// Maximum depth for transitive callees
         #[arg(long, default_value = "1")]
@@ -454,8 +500,8 @@ enum Commands {
         uri: String,
 
         /// Path to the database file
-        #[arg(short, long, default_value = "coderev.db")]
-        database: PathBuf,
+        #[arg(short, long)]
+        database: Option<PathBuf>,
 
         /// Maximum depth for impact traversal
         #[arg(long, default_value = "3")]
@@ -469,15 +515,15 @@ enum Commands {
     /// Show statistics about the indexed codebase
     Stats {
         /// Path to the database file
-        #[arg(short, long, default_value = "coderev.db")]
-        database: PathBuf,
+        #[arg(short, long)]
+        database: Option<PathBuf>,
     },
 
     /// Run the global resolver to resolve unresolved references
     Resolve {
         /// Path to the database file
-        #[arg(short, long, default_value = "coderev.db")]
-        database: PathBuf,
+        #[arg(short, long)]
+        database: Option<PathBuf>,
 
         /// Show verbose output
         #[arg(short, long)]
@@ -487,8 +533,8 @@ enum Commands {
     /// Serve the Coderev UI and API
     Serve {
         /// Path to the database file
-        #[arg(short, long, default_value = "coderev.db")]
-        database: PathBuf,
+        #[arg(short, long)]
+        database: Option<PathBuf>,
 
         /// Port to listen on
         #[arg(short, long, default_value = "3000")]
@@ -502,19 +548,35 @@ enum Commands {
     /// Run the MCP server over stdio
     Mcp {
         /// Path to the database file
-        #[arg(short, long, default_value = "coderev.db")]
-        database: PathBuf,
+        #[arg(short, long)]
+        database: Option<PathBuf>,
     },
 
     /// Watch for file changes and incrementally index
     Watch {
         /// Path to the repository or directory to watch
         #[arg(short, long)]
-        path: PathBuf,
+        path: Option<PathBuf>,
 
         /// Path to the database file
-        #[arg(short, long, default_value = "coderev.db")]
-        database: PathBuf,
+        #[arg(short, long)]
+        database: Option<PathBuf>,
+
+        /// Run watcher in background (daemon mode)
+        #[arg(long)]
+        background: bool,
+
+        /// Show watcher status
+        #[arg(long)]
+        status: bool,
+
+        /// Stop background watcher
+        #[arg(long)]
+        stop: bool,
+
+        /// Internal flag for daemonized watcher
+        #[arg(long, hide = true)]
+        daemon: bool,
     },
 
     /// Trace calls (alias for callers/callees)
@@ -531,8 +593,8 @@ enum TraceCommands {
         uri: String,
 
         /// Path to the database file
-        #[arg(short, long, default_value = "coderev.db")]
-        database: PathBuf,
+        #[arg(short, long)]
+        database: Option<PathBuf>,
 
         /// Maximum depth
         #[arg(long, default_value = "1")]
@@ -545,8 +607,8 @@ enum TraceCommands {
         uri: String,
 
         /// Path to the database file
-        #[arg(short, long, default_value = "coderev.db")]
-        database: PathBuf,
+        #[arg(short, long)]
+        database: Option<PathBuf>,
 
         /// Maximum depth
         #[arg(long, default_value = "1")]
@@ -567,6 +629,8 @@ struct IndexingStats {
 
 fn command_name(command: &Commands) -> &'static str {
     match command {
+        Commands::Init { .. } => "init",
+        Commands::AgentSetup { .. } => "agent-setup",
         Commands::Index { .. } => "index",
         Commands::Search { .. } => "search",
         Commands::Embed { .. } => "embed",
@@ -583,6 +647,100 @@ fn command_name(command: &Commands) -> &'static str {
             TraceCommands::Callees { .. } => "trace.callees",
         },
     }
+}
+
+fn resolve_database(cli: Option<PathBuf>, config: &Option<CoderevConfig>) -> PathBuf {
+    if let Some(path) = cli {
+        return path;
+    }
+    if let Some(cfg) = config {
+        if let Some(db) = &cfg.database {
+            return PathBuf::from(db);
+        }
+    }
+    let base = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+    config::default_database_path_in(&base)
+}
+
+fn resolve_database_ready(cli: Option<PathBuf>, config: &Option<CoderevConfig>) -> anyhow::Result<PathBuf> {
+    let db = resolve_database(cli, config);
+    config::ensure_db_dir(&db)?;
+    Ok(db)
+}
+
+fn resolve_path(cli: Option<PathBuf>, config: &Option<CoderevConfig>) -> anyhow::Result<PathBuf> {
+    if let Some(path) = cli {
+        return Ok(path);
+    }
+    if let Some(cfg) = config {
+        if let Some(path) = &cfg.path {
+            return Ok(PathBuf::from(path));
+        }
+    }
+    anyhow::bail!("missing --path (or set path in coderev.toml)");
+}
+
+fn resolve_repo(cli: Option<String>, config: &Option<CoderevConfig>, path: &PathBuf) -> String {
+    if let Some(repo) = cli {
+        return repo;
+    }
+    if let Some(cfg) = config {
+        if let Some(repo) = &cfg.repo {
+            return repo.clone();
+        }
+    }
+    path.file_name()
+        .map(|s| s.to_string_lossy().to_string())
+        .unwrap_or_else(|| "unknown".to_string())
+}
+
+struct WatchFiles {
+    pid_path: PathBuf,
+    log_path: PathBuf,
+}
+
+fn watch_files(db_path: &PathBuf) -> WatchFiles {
+    let base = db_path
+        .parent()
+        .map(PathBuf::from)
+        .unwrap_or_else(|| PathBuf::from("."));
+    WatchFiles {
+        pid_path: base.join("coderev-watch.pid"),
+        log_path: base.join("coderev-watch.log"),
+    }
+}
+
+fn read_pid(pid_path: &PathBuf) -> anyhow::Result<Option<i32>> {
+    if !pid_path.exists() {
+        return Ok(None);
+    }
+    let raw = std::fs::read_to_string(pid_path)?;
+    let pid = raw.trim().parse::<i32>().ok();
+    Ok(pid)
+}
+
+#[cfg(unix)]
+fn is_process_running(pid: i32) -> bool {
+    unsafe { libc::kill(pid, 0) == 0 }
+}
+
+#[cfg(not(unix))]
+fn is_process_running(_pid: i32) -> bool {
+    false
+}
+
+#[cfg(unix)]
+fn stop_process(pid: i32) -> anyhow::Result<()> {
+    let res = unsafe { libc::kill(pid, libc::SIGTERM) };
+    if res != 0 {
+        anyhow::bail!("failed to send SIGTERM to pid {}", pid);
+    }
+    Ok(())
+}
+
+#[cfg(not(unix))]
+fn stop_process(_pid: i32) -> anyhow::Result<()> {
+    anyhow::bail!("stop is not supported on this platform");
 }
 
 #[tokio::main]
@@ -624,15 +782,109 @@ async fn main() -> anyhow::Result<()> {
 }
 
 async fn run(cli: Cli, output_mode: OutputMode) -> anyhow::Result<()> {
+    let cfg_opt = config::load_config(cli.config.as_deref())?;
+    let global_config_path = cli.config.clone();
+
     match cli.command {
-        Commands::Index { path, database, repo } => {
-            let total_start = std::time::Instant::now();
-            tracing::info!("Indexing {} into {:?}", path.display(), database);
+        Commands::Init { path, database, repo, config: config_path, force } => {
+            let target_path = path.unwrap_or(std::env::current_dir()?);
             let repo_name = repo.unwrap_or_else(|| {
-                path.file_name()
+                target_path
+                    .file_name()
                     .map(|s| s.to_string_lossy().to_string())
                     .unwrap_or_else(|| "unknown".to_string())
             });
+            let db = database.unwrap_or_else(|| config::default_database_path_in(&target_path));
+            let cfg = CoderevConfig {
+                database: Some(db.display().to_string()),
+                repo: Some(repo_name),
+                path: Some(target_path.display().to_string()),
+            };
+
+            let cfg_path = config_path
+                .or(global_config_path)
+                .unwrap_or_else(config::default_config_path);
+
+            config::ensure_db_dir(&db)?;
+            config::ensure_gitignore(&target_path)?;
+            config::write_config(&cfg_path, &cfg, force)?;
+
+            if output_mode.is_human() {
+                println!("✅ Wrote config to {}", cfg_path.display());
+            } else if matches!(output_mode, OutputMode::Json) {
+                let data = serde_json::json!({
+                    "config_path": cfg_path.display().to_string(),
+                    "config": cfg,
+                });
+                emit_success(output_mode, "init", data)?;
+            } else {
+                let data = serde_json::json!({
+                    "c": cfg_path.display().to_string(),
+                    "cfg": cfg,
+                });
+                emit_success(output_mode, "init", data)?;
+            }
+        }
+        Commands::AgentSetup { path, database, output, force } => {
+            let target_path = path.unwrap_or(std::env::current_dir()?);
+            let db = database.unwrap_or_else(|| config::default_database_path_in(&target_path));
+            let out_path = output.unwrap_or_else(|| target_path.join(".coderev").join("mcp.json"));
+
+            config::ensure_db_dir(&db)?;
+            config::ensure_gitignore(&target_path)?;
+            if let Some(parent) = out_path.parent() {
+                if !parent.exists() {
+                    std::fs::create_dir_all(parent)?;
+                }
+            }
+            if out_path.exists() && !force {
+                anyhow::bail!("output already exists at {} (use --force to overwrite)", out_path.display());
+            }
+
+            let payload = serde_json::json!({
+                "mcpServers": {
+                    "coderev": {
+                        "command": "coderev",
+                        "args": ["mcp", "--database", db.display().to_string()]
+                    }
+                }
+            });
+            std::fs::write(&out_path, serde_json::to_string_pretty(&payload)?)?;
+
+            if output_mode.is_human() {
+                println!("✅ Wrote MCP config to {}", out_path.display());
+            } else if matches!(output_mode, OutputMode::Json) {
+                let data = serde_json::json!({
+                    "path": out_path.display().to_string(),
+                    "database": db.display().to_string(),
+                });
+                emit_success(output_mode, "agent-setup", data)?;
+            } else {
+                let data = serde_json::json!({
+                    "p": out_path.display().to_string(),
+                    "db": db.display().to_string(),
+                });
+                emit_success(output_mode, "agent-setup", data)?;
+            }
+        }
+        Commands::Index { path, database, repo } => {
+            let total_start = std::time::Instant::now();
+            let path = resolve_path(path, &cfg_opt)?;
+            let cfg_path = global_config_path.clone().unwrap_or_else(config::default_config_path);
+            if cfg_opt.is_none() && !cfg_path.exists() {
+                let db_path = config::default_database_path_in(&path);
+                let auto_cfg = CoderevConfig {
+                    database: Some(db_path.display().to_string()),
+                    repo: Some(path.file_name().map(|s| s.to_string_lossy().to_string()).unwrap_or_else(|| "unknown".to_string())),
+                    path: Some(path.display().to_string()),
+                };
+                config::ensure_db_dir(&db_path)?;
+                config::ensure_gitignore(&path)?;
+                config::write_config(&cfg_path, &auto_cfg, false)?;
+            }
+            let database = resolve_database_ready(database, &cfg_opt)?;
+            tracing::info!("Indexing {} into {:?}", path.display(), database);
+            let repo_name = resolve_repo(repo, &cfg_opt, &path);
             
             let store = SqliteStore::open(&database)?;
             let mut stats = IndexingStats::default();
@@ -978,6 +1230,7 @@ async fn run(cli: Cli, output_mode: OutputMode) -> anyhow::Result<()> {
         }
 
         Commands::Search { query, database, limit, kind, exact } => {
+            let database = resolve_database_ready(database, &cfg_opt)?;
             let store = SqliteStore::open(&database)?;
             
             let parsed_kind = if let Some(ref k) = kind {
@@ -1120,6 +1373,7 @@ async fn run(cli: Cli, output_mode: OutputMode) -> anyhow::Result<()> {
         }
 
         Commands::Embed { database, model: _ } => {
+            let database = resolve_database_ready(database, &cfg_opt)?;
             let store = SqliteStore::open(&database)?;
             let embedded = ensure_embeddings(&store)?;
             if output_mode.is_human() {
@@ -1141,6 +1395,7 @@ async fn run(cli: Cli, output_mode: OutputMode) -> anyhow::Result<()> {
         }
 
         Commands::Callers { uri, database, depth } => {
+            let database = resolve_database_ready(database, &cfg_opt)?;
             let store = SqliteStore::open(&database)?;
             ensure_resolved(&store)?;
             
@@ -1176,6 +1431,7 @@ async fn run(cli: Cli, output_mode: OutputMode) -> anyhow::Result<()> {
         }
 
         Commands::Callees { uri, database, depth } => {
+            let database = resolve_database_ready(database, &cfg_opt)?;
             let store = SqliteStore::open(&database)?;
             ensure_resolved(&store)?;
             
@@ -1211,6 +1467,7 @@ async fn run(cli: Cli, output_mode: OutputMode) -> anyhow::Result<()> {
         }
 
         Commands::Impact { uri, database, depth, format } => {
+            let database = resolve_database_ready(database, &cfg_opt)?;
             let store = SqliteStore::open(&database)?;
             ensure_resolved(&store)?;
             
@@ -1271,6 +1528,7 @@ async fn run(cli: Cli, output_mode: OutputMode) -> anyhow::Result<()> {
         }
 
         Commands::Stats { database } => {
+            let database = resolve_database_ready(database, &cfg_opt)?;
             let store = SqliteStore::open(&database)?;
             let stats = store.stats()?;
             
@@ -1294,6 +1552,7 @@ async fn run(cli: Cli, output_mode: OutputMode) -> anyhow::Result<()> {
         }
 
         Commands::Resolve { database, verbose } => {
+            let database = resolve_database_ready(database, &cfg_opt)?;
             let store = SqliteStore::open(&database)?;
             
             let unresolved_count = store.count_unresolved()?;
@@ -1400,6 +1659,7 @@ async fn run(cli: Cli, output_mode: OutputMode) -> anyhow::Result<()> {
         }
 
         Commands::Serve { database, port, host } => {
+            let database = resolve_database_ready(database, &cfg_opt)?;
             tracing::info!("Starting Coderev server on {}:{}", host, port);
             
             let addr = format!("{}:{}", host, port);
@@ -1433,6 +1693,7 @@ async fn run(cli: Cli, output_mode: OutputMode) -> anyhow::Result<()> {
         }
 
         Commands::Mcp { database } => {
+            let database = resolve_database_ready(database, &cfg_opt)?;
             let store = std::sync::Arc::new(SqliteStore::open(&database)?);
             let service = coderev::server::mcp::McpService::new(store);
             if output_mode.is_machine() {
@@ -1453,11 +1714,152 @@ async fn run(cli: Cli, output_mode: OutputMode) -> anyhow::Result<()> {
             service.run_stdio().await?;
         }
 
-        Commands::Watch { path, database } => {
+        Commands::Watch { path, database, background, status, stop, daemon } => {
+            let mode_count = background as u8 + status as u8 + stop as u8;
+            if mode_count > 1 {
+                anyhow::bail!("flags --background, --status, and --stop are mutually exclusive");
+            }
+
+            let watch_path = resolve_path(path, &cfg_opt)?;
+            let database = resolve_database_ready(database, &cfg_opt)?;
+            let files = watch_files(&database);
+
+            if status {
+                let pid = read_pid(&files.pid_path)?;
+                let running = pid.map(is_process_running).unwrap_or(false);
+                if !running && pid.is_some() {
+                    std::fs::remove_file(&files.pid_path).ok();
+                }
+
+                if output_mode.is_human() {
+                    if let Some(pid) = pid {
+                        if running {
+                            println!("✅ Watcher running (pid {})", pid);
+                        } else {
+                            println!("⚠️  Watcher not running (stale pid {})", pid);
+                        }
+                    } else {
+                        println!("ℹ️  Watcher not running");
+                    }
+                } else if matches!(output_mode, OutputMode::Json) {
+                    let data = serde_json::json!({
+                        "running": running,
+                        "pid": pid,
+                        "pid_file": files.pid_path.display().to_string(),
+                    });
+                    emit_success(output_mode, "watch.status", data)?;
+                } else {
+                    let data = serde_json::json!({
+                        "r": running,
+                        "pid": pid,
+                        "pf": files.pid_path.display().to_string(),
+                    });
+                    emit_success(output_mode, "watch.status", data)?;
+                }
+                return Ok(());
+            }
+
+            if stop {
+                let pid = read_pid(&files.pid_path)?;
+                if let Some(pid) = pid {
+                    stop_process(pid)?;
+                    std::fs::remove_file(&files.pid_path).ok();
+                    if output_mode.is_human() {
+                        println!("🛑 Stopped watcher (pid {})", pid);
+                    } else if matches!(output_mode, OutputMode::Json) {
+                        let data = serde_json::json!({
+                            "stopped": true,
+                            "pid": pid,
+                        });
+                        emit_success(output_mode, "watch.stop", data)?;
+                    } else {
+                        let data = serde_json::json!({
+                            "s": true,
+                            "pid": pid,
+                        });
+                        emit_success(output_mode, "watch.stop", data)?;
+                    }
+                } else {
+                    if output_mode.is_human() {
+                        println!("ℹ️  Watcher not running");
+                    } else if matches!(output_mode, OutputMode::Json) {
+                        let data = serde_json::json!({
+                            "stopped": false,
+                            "pid": null,
+                        });
+                        emit_success(output_mode, "watch.stop", data)?;
+                    } else {
+                        let data = serde_json::json!({
+                            "s": false,
+                            "pid": null,
+                        });
+                        emit_success(output_mode, "watch.stop", data)?;
+                    }
+                }
+                return Ok(());
+            }
+
+            if background {
+                if let Some(pid) = read_pid(&files.pid_path)? {
+                    if is_process_running(pid) {
+                        anyhow::bail!("watcher already running (pid {})", pid);
+                    }
+                }
+
+                if let Some(parent) = files.log_path.parent() {
+                    if !parent.exists() {
+                        std::fs::create_dir_all(parent)?;
+                    }
+                }
+
+                let log_file = std::fs::OpenOptions::new()
+                    .create(true)
+                    .append(true)
+                    .open(&files.log_path)?;
+
+                let exe = std::env::current_exe()?;
+                let mut cmd = std::process::Command::new(exe);
+                cmd.arg("watch")
+                    .arg("--path")
+                    .arg(watch_path.display().to_string())
+                    .arg("--database")
+                    .arg(database.display().to_string())
+                    .arg("--daemon")
+                    .stdout(log_file.try_clone()?)
+                    .stderr(log_file)
+                    .env("Coderev_QUIET", "1");
+
+                let child = cmd.spawn()?;
+                let pid = child.id() as i32;
+                std::fs::write(&files.pid_path, pid.to_string())?;
+
+                if output_mode.is_human() {
+                    println!("✅ Watcher started in background (pid {})", pid);
+                    println!("   Logs: {}", files.log_path.display());
+                } else if matches!(output_mode, OutputMode::Json) {
+                    let data = serde_json::json!({
+                        "started": true,
+                        "pid": pid,
+                        "pid_file": files.pid_path.display().to_string(),
+                        "log_file": files.log_path.display().to_string(),
+                    });
+                    emit_success(output_mode, "watch.background", data)?;
+                } else {
+                    let data = serde_json::json!({
+                        "s": true,
+                        "pid": pid,
+                        "pf": files.pid_path.display().to_string(),
+                        "lf": files.log_path.display().to_string(),
+                    });
+                    emit_success(output_mode, "watch.background", data)?;
+                }
+                return Ok(());
+            }
+
             let store = SqliteStore::open(&database)?;
-            let watch_path = path.clone();
-            let watcher = coderev::watcher::Watcher::new(path, store);
-            if output_mode.is_machine() {
+            let watcher = coderev::watcher::Watcher::new(watch_path.clone(), store);
+
+            if output_mode.is_machine() && !daemon {
                 if matches!(output_mode, OutputMode::Json) {
                     let data = serde_json::json!({
                         "database": database.display().to_string(),
@@ -1477,6 +1879,7 @@ async fn run(cli: Cli, output_mode: OutputMode) -> anyhow::Result<()> {
 
         Commands::Trace(cmd) => match cmd {
             TraceCommands::Callers { uri, database, depth } => {
+                let database = resolve_database_ready(database, &cfg_opt)?;
                 let store = SqliteStore::open(&database)?;
                 ensure_resolved(&store)?;
                 let engine = QueryEngine::new(&store);
@@ -1508,6 +1911,7 @@ async fn run(cli: Cli, output_mode: OutputMode) -> anyhow::Result<()> {
                 }
             },
             TraceCommands::Callees { uri, database, depth } => {
+                let database = resolve_database_ready(database, &cfg_opt)?;
                 let store = SqliteStore::open(&database)?;
                 ensure_resolved(&store)?;
                 let engine = QueryEngine::new(&store);

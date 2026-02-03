@@ -40,6 +40,29 @@ Coderev is a local-first engine that parses your repository, resolves symbol rel
 cargo run -- index --path /path/to/your/project --database coderev.db
 ```
 
+### 1.5) Optional: create a config file
+
+```bash
+cargo run -- init --path /path/to/your/project
+```
+
+This writes `coderev.toml` so you can omit `--path` and `--database` later.  
+By default the database is stored at `.coderev/coderev.db`, and `.coderev/` is added to `.gitignore`.
+
+## Installation (From Source)
+
+### macOS / Linux
+
+```bash
+./install.sh
+```
+
+### Windows (PowerShell)
+
+```powershell
+./install.ps1
+```
+
 ### 2) Search semantically
 
 ```bash
@@ -88,6 +111,7 @@ sequenceDiagram
 | Command | Purpose |
 | :--- | :--- |
 | `index` | Parse → resolve → embed your repository. |
+| `init` | Create `coderev.toml` for default paths and database. |
 | `search` | Semantic or exact search over symbols. |
 | `embed` | Generate embeddings (default model: `all-MiniLM-L6-v2`). |
 | `callers` / `callees` | Traverse the verified call graph. |
@@ -108,6 +132,30 @@ Coderev can emit stable, predictable output for scripts and agents:
 - `--json` — versioned schema (`schema_version: "1"`).
 - `--compact` — same data with shorter keys.
 - `--toon` — same as compact, just with a funnier name. We support TOON because why not.
+
+---
+
+## Configuration
+
+Coderev reads `coderev.toml` from the project root when present.
+
+```toml
+database = ".coderev/coderev.db"
+repo = "my-repo"
+path = "."
+```
+
+---
+
+## Agent Setup (MCP)
+
+Generate MCP config scaffolding for agents:
+
+```bash
+cargo run -- agent-setup --path /path/to/your/project
+```
+
+This writes `.coderev/mcp.json` pointing to `coderev mcp --database .coderev/coderev.db`.
 
 ---
 
@@ -136,6 +184,25 @@ cargo run -- serve --database coderev.db
 ```
 
 UI assets live in `ui/` and are served by the backend when built.
+
+---
+
+## Watcher Daemon
+
+Run in the background:
+
+```bash
+cargo run -- watch --background
+```
+
+Check status / stop:
+
+```bash
+cargo run -- watch --status
+cargo run -- watch --stop
+```
+
+Daemon state lives in `.coderev/` (`coderev-watch.pid`, `coderev-watch.log`).
 
 ---
 
