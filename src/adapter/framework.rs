@@ -127,11 +127,19 @@ pub fn default_registry() -> AdapterRegistry {
     }
     match super::query_adapter::QueryAdapter::rust() {
         Ok(adapter) => registry.register(adapter),
-        Err(e) => eprintln!("❌ Failed to register Rust adapter: {}", e),
+        Err(e) => {
+            if !crate::output::is_quiet() {
+                eprintln!("❌ Failed to register Rust adapter: {}", e);
+            }
+        }
     }
     match super::query_adapter::QueryAdapter::go() {
         Ok(adapter) => registry.register(adapter),
-        Err(e) => eprintln!("❌ Failed to register Go adapter: {}", e),
+        Err(e) => {
+            if !crate::output::is_quiet() {
+                eprintln!("❌ Failed to register Go adapter: {}", e);
+            }
+        }
     }
     
     registry

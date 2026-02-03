@@ -3,7 +3,7 @@ use crate::storage::SqliteStore;
 use crate::query::QueryEngine;
 use mcp_sdk_rs::server::{Server, ServerHandler};
 use mcp_sdk_rs::types::{
-    Tool, ToolResult, ListToolsRequest, ListToolsResult,
+    Tool, ToolResult, ListToolsResult,
     Implementation, ClientCapabilities, ServerCapabilities
 };
 use mcp_sdk_rs::error::ErrorCode;

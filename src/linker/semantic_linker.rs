@@ -3,8 +3,10 @@ use crate::storage::sqlite::{SqliteStore, PersistedUnresolvedReference};
 use crate::query::embedding::EmbeddingEngine;
 use crate::edge::{Edge, EdgeKind};
 use crate::uri::SymbolUri;
+use crate::output;
 use std::io::Write;
 
+#[derive(Debug, Clone, serde::Serialize)]
 pub struct SemanticLinkerStats {
     pub resolved: usize,
     pub candidates: usize,
@@ -47,7 +49,9 @@ impl<'a> SemanticLinker<'a> {
         }
 
         // Phase 1: Cache ALL symbol embeddings in memory
-        println!("   Caching symbol embeddings...");
+        if !output::is_quiet() {
+            println!("   Caching symbol embeddings...");
+        }
         let symbol_embeddings = self.store.get_all_embeddings()?;
         let cached_symbols: Vec<(SymbolUri, Vec<f32>)> = symbol_embeddings.into_iter()
             .filter_map(|(uri_str, vec)| {
@@ -60,9 +64,11 @@ impl<'a> SemanticLinker<'a> {
         let mut processed = 0;
         let total_targets = targets.len();
         
-        println!("   Processing {} semantic candidates...", total_targets);
-        print!("   Progress: 0 / {}", total_targets);
-        std::io::stdout().flush().ok();
+        if !output::is_quiet() {
+            println!("   Processing {} semantic candidates...", total_targets);
+            print!("   Progress: 0 / {}", total_targets);
+            std::io::stdout().flush().ok();
+        }
 
         for chunk in targets.chunks(batch_size) {
             // 1. Prepare batch for embedding
@@ -133,11 +139,15 @@ impl<'a> SemanticLinker<'a> {
             }
             self.store.commit()?;
             
-            print!("\r   Progress: {} / {} ({} resolved)", processed, total_targets, resolved);
-            std::io::stdout().flush().ok();
+            if !output::is_quiet() {
+                print!("\r   Progress: {} / {} ({} resolved)", processed, total_targets, resolved);
+                std::io::stdout().flush().ok();
+            }
         }
 
-        println!("\n✅ Semantic Resolver complete.");
+        if !output::is_quiet() {
+            println!("\n✅ Semantic Resolver complete.");
+        }
         Ok(SemanticLinkerStats { resolved, candidates: candidates_count, total })
     }
     

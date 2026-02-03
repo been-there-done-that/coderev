@@ -1,6 +1,7 @@
 //! Coderev CLI - Command-line interface for Universal Code Intelligence Substrate
 
 use clap::{Parser, Subcommand};
+use serde::Serialize;
 use std::path::PathBuf;
 use coderev::storage::SqliteStore;
 use coderev::adapter;
@@ -30,8 +31,339 @@ struct Cli {
     #[arg(short, long, global = true)]
     verbose: bool,
 
+    /// Emit JSON output (stable schema)
+    #[arg(long, global = true)]
+    json: bool,
+
+    /// Emit compact JSON output (short keys)
+    #[arg(long, global = true)]
+    compact: bool,
+
+    /// Emit TOON JSON output (because yes)
+    #[arg(long, global = true)]
+    toon: bool,
+
     #[command(subcommand)]
     command: Commands,
+}
+
+const SCHEMA_VERSION: &str = "1";
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum OutputMode {
+    Human,
+    Json,
+    Compact,
+    Toon,
+}
+
+impl OutputMode {
+    fn from_flags(json: bool, compact: bool, toon: bool) -> anyhow::Result<Self> {
+        let count = json as u8 + compact as u8 + toon as u8;
+        if count > 1 {
+            anyhow::bail!("flags --json, --compact, and --toon are mutually exclusive");
+        }
+        if compact {
+            return Ok(Self::Compact);
+        }
+        if toon {
+            return Ok(Self::Toon);
+        }
+        if json {
+            return Ok(Self::Json);
+        }
+        Ok(Self::Human)
+    }
+
+    fn is_machine(self) -> bool {
+        !matches!(self, Self::Human)
+    }
+
+    fn is_human(self) -> bool {
+        matches!(self, Self::Human)
+    }
+
+    fn format_label(self) -> &'static str {
+        match self {
+            Self::Human => "human",
+            Self::Json => "json",
+            Self::Compact => "compact",
+            Self::Toon => "toon",
+        }
+    }
+}
+
+#[derive(Serialize)]
+struct ErrorOut {
+    message: String,
+}
+
+#[derive(Serialize)]
+struct ErrorOutCompact {
+    msg: String,
+}
+
+#[derive(Serialize)]
+struct Envelope<T: Serialize> {
+    schema_version: &'static str,
+    format: &'static str,
+    command: &'static str,
+    ok: bool,
+    data: Option<T>,
+    error: Option<ErrorOut>,
+}
+
+#[derive(Serialize)]
+struct CompactEnvelope<T: Serialize> {
+    v: &'static str,
+    f: &'static str,
+    cmd: &'static str,
+    ok: bool,
+    data: Option<T>,
+    err: Option<ErrorOutCompact>,
+}
+
+#[derive(Serialize)]
+struct SymbolRef {
+    kind: String,
+    name: String,
+    uri: String,
+    path: String,
+    line_start: u32,
+    line_end: u32,
+    signature: Option<String>,
+}
+
+#[derive(Serialize)]
+struct SymbolRefCompact {
+    k: String,
+    n: String,
+    u: String,
+    p: String,
+    ls: u32,
+    le: u32,
+    s: Option<String>,
+}
+
+#[derive(Serialize)]
+struct SearchItem {
+    kind: String,
+    name: String,
+    uri: String,
+    path: String,
+    line_start: u32,
+    line_end: u32,
+    score: f32,
+    signature: Option<String>,
+}
+
+#[derive(Serialize)]
+struct SearchItemCompact {
+    k: String,
+    n: String,
+    u: String,
+    p: String,
+    ls: u32,
+    le: u32,
+    sc: f32,
+    s: Option<String>,
+}
+
+#[derive(Serialize)]
+struct SearchOutput {
+    query: String,
+    kind: Option<String>,
+    limit: usize,
+    exact: bool,
+    mode: String,
+    results: Vec<SearchItem>,
+}
+
+#[derive(Serialize)]
+struct SearchOutputCompact {
+    q: String,
+    k: Option<String>,
+    l: usize,
+    x: bool,
+    m: String,
+    r: Vec<SearchItemCompact>,
+}
+
+#[derive(Serialize)]
+struct ListOutput {
+    uri: String,
+    depth: usize,
+    results: Vec<SymbolRef>,
+}
+
+#[derive(Serialize)]
+struct ListOutputCompact {
+    u: String,
+    d: usize,
+    r: Vec<SymbolRefCompact>,
+}
+
+#[derive(Serialize)]
+struct ImpactItem {
+    kind: String,
+    name: String,
+    uri: String,
+    path: String,
+    line_start: u32,
+    line_end: u32,
+    depth: usize,
+    confidence: f32,
+    edge_kind: String,
+}
+
+#[derive(Serialize)]
+struct ImpactItemCompact {
+    k: String,
+    n: String,
+    u: String,
+    p: String,
+    ls: u32,
+    le: u32,
+    d: usize,
+    c: f32,
+    e: String,
+}
+
+#[derive(Serialize)]
+struct ImpactOutput {
+    uri: String,
+    depth: usize,
+    results: Vec<ImpactItem>,
+}
+
+#[derive(Serialize)]
+struct ImpactOutputCompact {
+    u: String,
+    d: usize,
+    r: Vec<ImpactItemCompact>,
+}
+
+#[derive(Serialize)]
+struct IndexDurations {
+    indexing_ms: u128,
+    linking_ms: Option<u128>,
+    embedding_ms: Option<u128>,
+    semantic_ms: Option<u128>,
+    total_ms: u128,
+}
+
+#[derive(Serialize)]
+struct IndexOutput {
+    repo: String,
+    path: String,
+    database: String,
+    stats: IndexingStats,
+    linker: Option<coderev::linker::GlobalLinkerStats>,
+    embedded_symbols: usize,
+    semantic: Option<coderev::linker::SemanticLinkerStats>,
+    final_db: coderev::storage::DbStats,
+    durations: IndexDurations,
+}
+
+#[derive(Serialize)]
+struct IndexOutputCompact {
+    r: String,
+    p: String,
+    db: String,
+    s: IndexingStats,
+    l: Option<coderev::linker::GlobalLinkerStats>,
+    es: usize,
+    se: Option<coderev::linker::SemanticLinkerStats>,
+    fd: coderev::storage::DbStats,
+    t: IndexDurations,
+}
+
+fn emit_success<T: Serialize>(mode: OutputMode, command: &'static str, data: T) -> anyhow::Result<()> {
+    match mode {
+        OutputMode::Human => Ok(()),
+        OutputMode::Json => {
+            let payload = Envelope {
+                schema_version: SCHEMA_VERSION,
+                format: mode.format_label(),
+                command,
+                ok: true,
+                data: Some(data),
+                error: None,
+            };
+            println!("{}", serde_json::to_string_pretty(&payload)?);
+            Ok(())
+        }
+        OutputMode::Compact | OutputMode::Toon => {
+            let payload = CompactEnvelope {
+                v: SCHEMA_VERSION,
+                f: mode.format_label(),
+                cmd: command,
+                ok: true,
+                data: Some(data),
+                err: None,
+            };
+            println!("{}", serde_json::to_string(&payload)?);
+            Ok(())
+        }
+    }
+}
+
+fn emit_error(mode: OutputMode, command: &'static str, err: &anyhow::Error) -> anyhow::Result<()> {
+    match mode {
+        OutputMode::Human => Err(anyhow::anyhow!(err.to_string())),
+        OutputMode::Json => {
+            let payload = Envelope::<serde_json::Value> {
+                schema_version: SCHEMA_VERSION,
+                format: mode.format_label(),
+                command,
+                ok: false,
+                data: None,
+                error: Some(ErrorOut {
+                    message: err.to_string(),
+                }),
+            };
+            println!("{}", serde_json::to_string_pretty(&payload)?);
+            Ok(())
+        }
+        OutputMode::Compact | OutputMode::Toon => {
+            let payload = CompactEnvelope::<serde_json::Value> {
+                v: SCHEMA_VERSION,
+                f: mode.format_label(),
+                cmd: command,
+                ok: false,
+                data: None,
+                err: Some(ErrorOutCompact {
+                    msg: err.to_string(),
+                }),
+            };
+            println!("{}", serde_json::to_string(&payload)?);
+            Ok(())
+        }
+    }
+}
+
+fn symbol_ref(symbol: &coderev::Symbol) -> SymbolRef {
+    SymbolRef {
+        kind: symbol.kind.as_str().to_string(),
+        name: symbol.name.clone(),
+        uri: symbol.uri.to_uri_string(),
+        path: symbol.path.clone(),
+        line_start: symbol.line_start,
+        line_end: symbol.line_end,
+        signature: symbol.signature.clone(),
+    }
+}
+
+fn symbol_ref_compact(symbol: &coderev::Symbol) -> SymbolRefCompact {
+    SymbolRefCompact {
+        k: symbol.kind.as_str().to_string(),
+        n: symbol.name.clone(),
+        u: symbol.uri.to_uri_string(),
+        p: symbol.path.clone(),
+        ls: symbol.line_start,
+        le: symbol.line_end,
+        s: symbol.signature.clone(),
+    }
 }
 
 #[derive(Subcommand)]
@@ -222,7 +554,7 @@ enum TraceCommands {
     },
 }
 
-#[derive(Default)]
+#[derive(Default, Serialize)]
 struct IndexingStats {
     unchanged: usize,
     added: usize,
@@ -233,14 +565,42 @@ struct IndexingStats {
     chunked: usize,
 }
 
+fn command_name(command: &Commands) -> &'static str {
+    match command {
+        Commands::Index { .. } => "index",
+        Commands::Search { .. } => "search",
+        Commands::Embed { .. } => "embed",
+        Commands::Callers { .. } => "callers",
+        Commands::Callees { .. } => "callees",
+        Commands::Impact { .. } => "impact",
+        Commands::Stats { .. } => "stats",
+        Commands::Resolve { .. } => "resolve",
+        Commands::Serve { .. } => "serve",
+        Commands::Mcp { .. } => "mcp",
+        Commands::Watch { .. } => "watch",
+        Commands::Trace(cmd) => match cmd {
+            TraceCommands::Callers { .. } => "trace.callers",
+            TraceCommands::Callees { .. } => "trace.callees",
+        },
+    }
+}
+
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
-
     let cli = Cli::parse();
+    let output_mode = OutputMode::from_flags(cli.json, cli.compact, cli.toon)?;
+    let cmd_name = command_name(&cli.command);
 
-    // Initialize logging
+    if output_mode.is_machine() {
+        unsafe {
+            std::env::set_var("Coderev_QUIET", "1");
+        }
+    }
+
     let filter = if cli.verbose {
         EnvFilter::new("debug")
+    } else if output_mode.is_machine() {
+        EnvFilter::new("error")
     } else {
         EnvFilter::new("info")
     };
@@ -250,6 +610,20 @@ async fn main() -> anyhow::Result<()> {
         .with(filter)
         .init();
 
+    match run(cli, output_mode).await {
+        Ok(()) => Ok(()),
+        Err(err) => {
+            if output_mode.is_machine() {
+                emit_error(output_mode, cmd_name, &err)?;
+                Ok(())
+            } else {
+                Err(err)
+            }
+        }
+    }
+}
+
+async fn run(cli: Cli, output_mode: OutputMode) -> anyhow::Result<()> {
     match cli.command {
         Commands::Index { path, database, repo } => {
             let total_start = std::time::Instant::now();
@@ -263,14 +637,22 @@ async fn main() -> anyhow::Result<()> {
             let store = SqliteStore::open(&database)?;
             let mut stats = IndexingStats::default();
 
-            println!("🚀 Indexing repository: {}", repo_name);
-            println!("📂 Path: {:?}", path);
-            println!("🗄️  Database: {:?}", database);
+            if output_mode.is_human() {
+                println!("🚀 Indexing repository: {}", repo_name);
+                println!("📂 Path: {:?}", path);
+                println!("🗄️  Database: {:?}", database);
+            }
             
             // Channel for worker-to-coordinator communication
             let (tx, rx) = std::sync::mpsc::channel::<IndexMessage>();
             
             let start_indexing = std::time::Instant::now();
+            let mut linking_ms: Option<u128> = None;
+            let mut embedding_ms: Option<u128> = None;
+            let mut semantic_ms: Option<u128> = None;
+            let mut linker_stats: Option<coderev::linker::GlobalLinkerStats> = None;
+            let mut semantic_stats: Option<coderev::linker::SemanticLinkerStats> = None;
+            let mut embedded_symbols: usize = 0;
             
             // Configure file walker
             let walker = ignore::WalkBuilder::new(&path)
@@ -302,12 +684,16 @@ async fn main() -> anyhow::Result<()> {
                                         stats.unchanged += 1;
                                     }
                                     FileStatus::Modified => {
-                                        println!("📝 Modified: {}", relative_path);
+                                        if output_mode.is_human() {
+                                            println!("📝 Modified: {}", relative_path);
+                                        }
                                         store.delete_file_data(&relative_path).ok();
                                         stats.modified += 1;
                                     }
                                     FileStatus::New => {
-                                        println!("✨ New: {}", relative_path);
+                                        if output_mode.is_human() {
+                                            println!("✨ New: {}", relative_path);
+                                        }
                                         stats.added += 1;
                                     }
                                 }
@@ -439,20 +825,24 @@ async fn main() -> anyhow::Result<()> {
                 let db_paths = store.get_all_indexed_files().unwrap_or_default();
                 for db_path in db_paths {
                     if !seen_paths.contains(&db_path) {
-                        println!("🗑️  Deleted: {}", db_path);
+                        if output_mode.is_human() {
+                            println!("🗑️  Deleted: {}", db_path);
+                        }
                         store.delete_file_data(&db_path).ok();
                         stats.deleted += 1;
                     }
                 }
             });
 
-            println!("\n📊 Indexing Summary:");
-            println!("   Unchanged: {}", stats.unchanged);
-            println!("   Added:     {}", stats.added);
-            println!("   Modified:  {}", stats.modified);
-            println!("   Deleted:   {}", stats.deleted);
-            println!("   Errors:    {}", stats.errors);
-            println!("   ⏱️  Indexing took: {:?}", start_indexing.elapsed());
+            if output_mode.is_human() {
+                println!("\n📊 Indexing Summary:");
+                println!("   Unchanged: {}", stats.unchanged);
+                println!("   Added:     {}", stats.added);
+                println!("   Modified:  {}", stats.modified);
+                println!("   Deleted:   {}", stats.deleted);
+                println!("   Errors:    {}", stats.errors);
+                println!("   ⏱️  Indexing took: {:?}", start_indexing.elapsed());
+            }
 
             // Phase 2: Linking
             let something_changed = stats.added > 0 || stats.modified > 0 || stats.deleted > 0;
@@ -473,18 +863,27 @@ async fn main() -> anyhow::Result<()> {
                 // We should probably NOT clear *all* edges, only edges from modified files are gone.
                 // Edges *to* modified files are also gone (handled in delete_file_data).
                 
-                println!("\n🔗 Phase 2: Running Global Linker...");
+                if output_mode.is_human() {
+                    println!("\n🔗 Phase 2: Running Global Linker...");
+                }
                 let start_linking = std::time::Instant::now();
                 let linker = coderev::linker::GlobalLinker::new(&store);
                 let stats = linker.run()?;
-                println!("{}", stats);
-                println!("   ⏱️  Linking took: {:?}", start_linking.elapsed());
+                linker_stats = Some(stats.clone());
+                linking_ms = Some(start_linking.elapsed().as_millis());
+                if output_mode.is_human() {
+                    println!("{}", stats);
+                    println!("   ⏱️  Linking took: {:?}", start_linking.elapsed());
+                }
                 
                 // Phase 3: Embeddings
                 // Only for new symbols
                 let symbols_to_embed = store.find_symbols_without_embeddings()?;
                 if !symbols_to_embed.is_empty() {
-                    println!("\n🧠 Phase 3: Generating Embeddings ({} new symbols)...", symbols_to_embed.len());
+                    embedded_symbols = symbols_to_embed.len();
+                    if output_mode.is_human() {
+                        println!("\n🧠 Phase 3: Generating Embeddings ({} new symbols)...", symbols_to_embed.len());
+                    }
                     let start_embeddings = std::time::Instant::now();
                     let engine = coderev::query::EmbeddingEngine::new()?;
                     let batch_size = 32;
@@ -497,32 +896,85 @@ async fn main() -> anyhow::Result<()> {
                         }
                         store.commit()?;
                         processed += chunk.len();
-                        print!("\r   Progress: {}/{} symbols", processed, symbols_to_embed.len());
-                        std::io::stdout().flush().ok();
+                        if output_mode.is_human() {
+                            print!("\r   Progress: {}/{} symbols", processed, symbols_to_embed.len());
+                            std::io::stdout().flush().ok();
+                        }
                     }
-                    println!(); // New line after progress
-                    println!("   ⏱️  Embeddings took: {:?}", start_embeddings.elapsed());
+                    embedding_ms = Some(start_embeddings.elapsed().as_millis());
+                    if output_mode.is_human() {
+                        println!(); // New line after progress
+                        println!("   ⏱️  Embeddings took: {:?}", start_embeddings.elapsed());
+                    }
                 }
 
                 // Phase 4: Semantic Resolution
                 // Again, only if needed.
-                 println!("\n🧠 Phase 4: Running Semantic Resolver...");
+                if output_mode.is_human() {
+                    println!("\n🧠 Phase 4: Running Semantic Resolver...");
+                }
                 let start_semantic = std::time::Instant::now();
                 let engine = coderev::query::EmbeddingEngine::new()?;
                 let semantic_linker = coderev::linker::SemanticLinker::new(&store, &engine);
                 let stats = semantic_linker.run()?;
-                if stats.resolved > 0 {
-                    println!("✅ Semantic Resolved: {}", stats.resolved);
+                semantic_stats = Some(stats.clone());
+                semantic_ms = Some(start_semantic.elapsed().as_millis());
+                if output_mode.is_human() {
+                    if stats.resolved > 0 {
+                        println!("✅ Semantic Resolved: {}", stats.resolved);
+                    }
+                    println!("   ⏱️  Semantic Resolution took: {:?}", start_semantic.elapsed());
                 }
-                println!("   ⏱️  Semantic Resolution took: {:?}", start_semantic.elapsed());
             } else {
-                println!("\n✨ Repository is up to date.");
+                if output_mode.is_human() {
+                    println!("\n✨ Repository is up to date.");
+                }
             }
 
             // Show final stats
             let final_stats = store.stats()?;
-            println!("\n{}", final_stats);
-            println!("\n⏱️  Total time: {:?}", total_start.elapsed());
+            if output_mode.is_human() {
+                println!("\n{}", final_stats);
+                println!("\n⏱️  Total time: {:?}", total_start.elapsed());
+            }
+
+            if output_mode.is_machine() {
+                let durations = IndexDurations {
+                    indexing_ms: start_indexing.elapsed().as_millis(),
+                    linking_ms,
+                    embedding_ms,
+                    semantic_ms,
+                    total_ms: total_start.elapsed().as_millis(),
+                };
+
+                if matches!(output_mode, OutputMode::Json) {
+                    let data = IndexOutput {
+                        repo: repo_name,
+                        path: path.display().to_string(),
+                        database: database.display().to_string(),
+                        stats,
+                        linker: linker_stats,
+                        embedded_symbols,
+                        semantic: semantic_stats,
+                        final_db: final_stats,
+                        durations,
+                    };
+                    emit_success(output_mode, "index", data)?;
+                } else {
+                    let data = IndexOutputCompact {
+                        r: repo_name,
+                        p: path.display().to_string(),
+                        db: database.display().to_string(),
+                        s: stats,
+                        l: linker_stats,
+                        es: embedded_symbols,
+                        se: semantic_stats,
+                        fd: final_stats,
+                        t: durations,
+                    };
+                    emit_success(output_mode, "index", data)?;
+                }
+            }
         }
 
         Commands::Search { query, database, limit, kind, exact } => {
@@ -535,6 +987,7 @@ async fn main() -> anyhow::Result<()> {
                 None
             };
 
+            let mut search_mode = if exact { "exact" } else { "vector" }.to_string();
             let results = if !exact && !query.trim().is_empty() {
                 // Ensure embeddings exist before searching.
                 // If they don't exist, we should probably generate them or fall back?
@@ -546,17 +999,21 @@ async fn main() -> anyhow::Result<()> {
                 // User said "defaultly assume... unless we turn it off". 
                 // That implies we SHOULD use it. So ensure_embeddings is correct.
                 // But ensure_embeddings prints progress, so the user knows what's happening.
-                ensure_embeddings(&store)?;
-                
-                println!("🧠 [Local Embedding] Searching for: '{}'...", query);
+                let _ = ensure_embeddings(&store)?;
+                if output_mode.is_human() {
+                    println!("🧠 [Local Embedding] Searching for: '{}'...", query);
+                }
                 let engine = QueryEngine::new(&store);
                 match coderev::query::EmbeddingEngine::new() {
                     Ok(embedding_engine) => {
                          match embedding_engine.embed_query(&query) {
                             Ok(query_vector) => engine.search_by_vector(&query_vector, limit)?,
                             Err(e) => {
-                                eprintln!("⚠️  Embedding Generation Failed: {}", e);
-                                println!("🔍 Falling back to exact text search...");
+                                if output_mode.is_human() {
+                                    eprintln!("⚠️  Embedding Generation Failed: {}", e);
+                                    println!("🔍 Falling back to exact text search...");
+                                }
+                                search_mode = "fallback_exact".to_string();
                                 store.search_content(&query, parsed_kind, limit)? // Fallback
                                     .into_iter()
                                     .map(|s| coderev::query::engine::QueryResult::new(s, 1.0))
@@ -565,8 +1022,11 @@ async fn main() -> anyhow::Result<()> {
                          }
                     },
                     Err(e) => {
-                         eprintln!("⚠️  Failed to initialize Embedding Engine: {}", e);
-                         println!("🔍 Falling back to exact text search...");
+                         if output_mode.is_human() {
+                             eprintln!("⚠️  Failed to initialize Embedding Engine: {}", e);
+                             println!("🔍 Falling back to exact text search...");
+                         }
+                         search_mode = "fallback_exact".to_string();
                          store.search_content(&query, parsed_kind, limit)? // Fallback
                             .into_iter()
                             .map(|s| coderev::query::engine::QueryResult::new(s, 1.0))
@@ -575,7 +1035,10 @@ async fn main() -> anyhow::Result<()> {
                 }
             } else {
                 // Exact search requested
-                println!("🔍 [Exact Match] Searching for: '{}' (kind: {:?}, limit: {})...", query, kind, limit);
+                search_mode = "exact".to_string();
+                if output_mode.is_human() {
+                    println!("🔍 [Exact Match] Searching for: '{}' (kind: {:?}, limit: {})...", query, kind, limit);
+                }
                 store.search_content(&query, parsed_kind, limit)?
                     .into_iter()
                     .map(|s| coderev::query::engine::QueryResult::new(s, 1.0))
@@ -587,28 +1050,94 @@ async fn main() -> anyhow::Result<()> {
             // Semantic search might return "somewhat relevant" things even if bad match.
             // If vector returns empty, it means no embeddings or threshold? (search_by_vector has no threshold currently, just sorts).
             
-            if results.is_empty() {
-                println!("❌ No symbols found.");
-                if !exact {
-                     // If we tried vector and found nothing, maybe try text?
-                     // Vector search usually returns *something* unless DB is empty.
-                }
-            } else {
-                for res in results {
-                    let uri_str = res.symbol.uri.to_uri_string();
-                    println!("- [{:?}] {} (Score: {:.2})", res.symbol.kind, res.symbol.name, res.score);
-                    println!("  URI: {}", uri_str);
-                    if let Some(sig) = &res.symbol.signature {
-                        println!("  Sig: {}", sig);
+            if output_mode.is_human() {
+                if results.is_empty() {
+                    println!("❌ No symbols found.");
+                    if !exact {
+                        // Vector search usually returns something unless DB is empty.
                     }
+                } else {
+                    for res in &results {
+                        let uri_str = res.symbol.uri.to_uri_string();
+                        println!("- [{:?}] {} (Score: {:.2})", res.symbol.kind, res.symbol.name, res.score);
+                        println!("  URI: {}", uri_str);
+                        if let Some(sig) = &res.symbol.signature {
+                            println!("  Sig: {}", sig);
+                        }
+                    }
+                }
+            }
+
+            if output_mode.is_machine() {
+                if matches!(output_mode, OutputMode::Json) {
+                    let items = results
+                        .into_iter()
+                        .map(|res| SearchItem {
+                            kind: res.symbol.kind.as_str().to_string(),
+                            name: res.symbol.name,
+                            uri: res.symbol.uri.to_uri_string(),
+                            path: res.symbol.path,
+                            line_start: res.symbol.line_start,
+                            line_end: res.symbol.line_end,
+                            score: res.score,
+                            signature: res.symbol.signature,
+                        })
+                        .collect();
+                    let data = SearchOutput {
+                        query,
+                        kind,
+                        limit,
+                        exact,
+                        mode: search_mode,
+                        results: items,
+                    };
+                    emit_success(output_mode, "search", data)?;
+                } else {
+                    let items = results
+                        .into_iter()
+                        .map(|res| SearchItemCompact {
+                            k: res.symbol.kind.as_str().to_string(),
+                            n: res.symbol.name,
+                            u: res.symbol.uri.to_uri_string(),
+                            p: res.symbol.path,
+                            ls: res.symbol.line_start,
+                            le: res.symbol.line_end,
+                            sc: res.score,
+                            s: res.symbol.signature,
+                        })
+                        .collect();
+                    let data = SearchOutputCompact {
+                        q: query,
+                        k: kind,
+                        l: limit,
+                        x: exact,
+                        m: search_mode,
+                        r: items,
+                    };
+                    emit_success(output_mode, "search", data)?;
                 }
             }
         }
 
         Commands::Embed { database, model: _ } => {
             let store = SqliteStore::open(&database)?;
-            ensure_embeddings(&store)?;
-            println!("✅ Embedding complete!");
+            let embedded = ensure_embeddings(&store)?;
+            if output_mode.is_human() {
+                println!("✅ Embedding complete!");
+            } else {
+                let data = if matches!(output_mode, OutputMode::Json) {
+                    serde_json::json!({
+                        "database": database.display().to_string(),
+                        "embedded_symbols": embedded,
+                    })
+                } else {
+                    serde_json::json!({
+                        "db": database.display().to_string(),
+                        "es": embedded,
+                    })
+                };
+                emit_success(output_mode, "embed", data)?;
+            }
         }
 
         Commands::Callers { uri, database, depth } => {
@@ -618,15 +1147,31 @@ async fn main() -> anyhow::Result<()> {
             let engine = QueryEngine::new(&store);
             let target_uri = coderev::uri::SymbolUri::parse(&uri)?;
             
-            println!("📞 Finding callers for: {} (depth: {})...", uri, depth);
             let callers = engine.find_callers(&target_uri, depth)?;
-            
-            if callers.is_empty() {
-                println!("∅ No callers found.");
-            } else {
-                for symbol in callers {
-                    println!("- [{:?}] {} ({})", symbol.kind, symbol.name, symbol.uri.to_uri_string());
+
+            if output_mode.is_human() {
+                println!("📞 Finding callers for: {} (depth: {})...", uri, depth);
+                if callers.is_empty() {
+                    println!("∅ No callers found.");
+                } else {
+                    for symbol in &callers {
+                        println!("- [{:?}] {} ({})", symbol.kind, symbol.name, symbol.uri.to_uri_string());
+                    }
                 }
+            } else if matches!(output_mode, OutputMode::Json) {
+                let data = ListOutput {
+                    uri,
+                    depth,
+                    results: callers.iter().map(symbol_ref).collect(),
+                };
+                emit_success(output_mode, "callers", data)?;
+            } else {
+                let data = ListOutputCompact {
+                    u: uri,
+                    d: depth,
+                    r: callers.iter().map(symbol_ref_compact).collect(),
+                };
+                emit_success(output_mode, "callers", data)?;
             }
         }
 
@@ -637,15 +1182,31 @@ async fn main() -> anyhow::Result<()> {
             let engine = QueryEngine::new(&store);
             let target_uri = coderev::uri::SymbolUri::parse(&uri)?;
             
-            println!("📱 Finding callees for: {} (depth: {})...", uri, depth);
             let callees = engine.find_callees(&target_uri, depth)?;
             
-            if callees.is_empty() {
-                println!("∅ No callees found.");
-            } else {
-                for symbol in callees {
-                    println!("- [{:?}] {} ({})", symbol.kind, symbol.name, symbol.uri.to_uri_string());
+            if output_mode.is_human() {
+                println!("📱 Finding callees for: {} (depth: {})...", uri, depth);
+                if callees.is_empty() {
+                    println!("∅ No callees found.");
+                } else {
+                    for symbol in &callees {
+                        println!("- [{:?}] {} ({})", symbol.kind, symbol.name, symbol.uri.to_uri_string());
+                    }
                 }
+            } else if matches!(output_mode, OutputMode::Json) {
+                let data = ListOutput {
+                    uri,
+                    depth,
+                    results: callees.iter().map(symbol_ref).collect(),
+                };
+                emit_success(output_mode, "callees", data)?;
+            } else {
+                let data = ListOutputCompact {
+                    u: uri,
+                    d: depth,
+                    r: callees.iter().map(symbol_ref_compact).collect(),
+                };
+                emit_success(output_mode, "callees", data)?;
             }
         }
 
@@ -656,13 +1217,13 @@ async fn main() -> anyhow::Result<()> {
             let engine = QueryEngine::new(&store);
             let target_uri = coderev::uri::SymbolUri::parse(&uri)?;
             
-            println!("💥 Impact analysis for: {} (depth: {})...", uri, depth);
             let impact = engine.impact_analysis(&target_uri, depth)?;
-            
-            if format == "json" {
-                println!("{}", serde_json::to_string_pretty(&impact)?);
-            } else {
-                if impact.is_empty() {
+
+            if output_mode.is_human() {
+                println!("💥 Impact analysis for: {} (depth: {})...", uri, depth);
+                if format == "json" {
+                    println!("{}", serde_json::to_string_pretty(&impact)?);
+                } else if impact.is_empty() {
                     println!("∅ No impact found.");
                 } else {
                     for res in impact {
@@ -672,6 +1233,40 @@ async fn main() -> anyhow::Result<()> {
                         println!("   URI: {}", res.symbol.uri.to_uri_string());
                     }
                 }
+            } else if matches!(output_mode, OutputMode::Json) {
+                let items = impact
+                    .into_iter()
+                    .map(|res| ImpactItem {
+                        kind: res.symbol.kind.as_str().to_string(),
+                        name: res.symbol.name,
+                        uri: res.symbol.uri.to_uri_string(),
+                        path: res.symbol.path,
+                        line_start: res.symbol.line_start,
+                        line_end: res.symbol.line_end,
+                        depth: res.depth,
+                        confidence: res.confidence,
+                        edge_kind: res.edge_kind.as_str().to_string(),
+                    })
+                    .collect();
+                let data = ImpactOutput { uri, depth, results: items };
+                emit_success(output_mode, "impact", data)?;
+            } else {
+                let items = impact
+                    .into_iter()
+                    .map(|res| ImpactItemCompact {
+                        k: res.symbol.kind.as_str().to_string(),
+                        n: res.symbol.name,
+                        u: res.symbol.uri.to_uri_string(),
+                        p: res.symbol.path,
+                        ls: res.symbol.line_start,
+                        le: res.symbol.line_end,
+                        d: res.depth,
+                        c: res.confidence,
+                        e: res.edge_kind.as_str().to_string(),
+                    })
+                    .collect();
+                let data = ImpactOutputCompact { u: uri, d: depth, r: items };
+                emit_success(output_mode, "impact", data)?;
             }
         }
 
@@ -679,9 +1274,23 @@ async fn main() -> anyhow::Result<()> {
             let store = SqliteStore::open(&database)?;
             let stats = store.stats()?;
             
-            println!("📊 Coderev Statistics ({:?})", database);
-            println!("------------------------------------");
-            println!("{}", stats);
+            if output_mode.is_human() {
+                println!("📊 Coderev Statistics ({:?})", database);
+                println!("------------------------------------");
+                println!("{}", stats);
+            } else if matches!(output_mode, OutputMode::Json) {
+                let data = serde_json::json!({
+                    "database": database.display().to_string(),
+                    "stats": stats,
+                });
+                emit_success(output_mode, "stats", data)?;
+            } else {
+                let data = serde_json::json!({
+                    "db": database.display().to_string(),
+                    "s": stats,
+                });
+                emit_success(output_mode, "stats", data)?;
+            }
         }
 
         Commands::Resolve { database, verbose } => {
@@ -690,13 +1299,33 @@ async fn main() -> anyhow::Result<()> {
             let unresolved_count = store.count_unresolved()?;
 
             if unresolved_count == 0 {
-                println!("✅ No unresolved references to resolve.");
+                if output_mode.is_human() {
+                    println!("✅ No unresolved references to resolve.");
+                } else if matches!(output_mode, OutputMode::Json) {
+                    let data = serde_json::json!({
+                        "database": database.display().to_string(),
+                        "unresolved": 0,
+                        "linked": null,
+                        "semantic": null,
+                    });
+                    emit_success(output_mode, "resolve", data)?;
+                } else {
+                    let data = serde_json::json!({
+                        "db": database.display().to_string(),
+                        "u": 0,
+                        "l": null,
+                        "se": null,
+                    });
+                    emit_success(output_mode, "resolve", data)?;
+                }
                 return Ok(());
             }
             
-            println!("🔗 Running Global Linker on {} unresolved references...", unresolved_count);
+            if output_mode.is_human() {
+                println!("🔗 Running Global Linker on {} unresolved references...", unresolved_count);
+            }
             
-            if verbose {
+            if verbose && output_mode.is_human() {
                 println!("\nUnresolved references:");
                 for unresolved in store.get_all_unresolved()? {
                     println!("  - {} (from {} @ line {})", 
@@ -710,25 +1339,31 @@ async fn main() -> anyhow::Result<()> {
             let linker = coderev::linker::GlobalLinker::new(&store);
             let stats = linker.run()?;
             
-            println!("{}", stats);
+            if output_mode.is_human() {
+                println!("{}", stats);
+            }
 
             // Run Semantic Resolver
-            println!("\n🧠 Running Semantic Resolver...");
-            ensure_embeddings(&store)?;
+            if output_mode.is_human() {
+                println!("\n🧠 Running Semantic Resolver...");
+            }
+            let embedded = ensure_embeddings(&store)?;
             
             let engine = coderev::query::EmbeddingEngine::new()?;
             let semantic_linker = coderev::linker::SemanticLinker::new(&store, &engine);
             let semantic_stats = semantic_linker.run()?;
-            if semantic_stats.resolved > 0 {
-                println!("✅ Semantic Resolver: Resolved {} references (checked {} candidates)", semantic_stats.resolved, semantic_stats.candidates);
-            } else {
-                println!("ℹ️  Semantic Resolver: No new edges resolved.");
+            if output_mode.is_human() {
+                if semantic_stats.resolved > 0 {
+                    println!("✅ Semantic Resolver: Resolved {} references (checked {} candidates)", semantic_stats.resolved, semantic_stats.candidates);
+                } else {
+                    println!("ℹ️  Semantic Resolver: No new edges resolved.");
+                }
             }
 
 
             
             // Show remaining unresolved if verbose
-            if verbose {
+            if verbose && output_mode.is_human() {
                 let remaining = store.get_all_unresolved()?;
                 if !remaining.is_empty() {
                     println!("\nRemaining unresolved:");
@@ -738,6 +1373,28 @@ async fn main() -> anyhow::Result<()> {
                             unresolved.file_path,
                             unresolved.line);
                     }
+                }
+            }
+
+            if output_mode.is_machine() {
+                if matches!(output_mode, OutputMode::Json) {
+                    let data = serde_json::json!({
+                        "database": database.display().to_string(),
+                        "unresolved": unresolved_count,
+                        "embedded_symbols": embedded,
+                        "linked": stats,
+                        "semantic": semantic_stats,
+                    });
+                    emit_success(output_mode, "resolve", data)?;
+                } else {
+                    let data = serde_json::json!({
+                        "db": database.display().to_string(),
+                        "u": unresolved_count,
+                        "es": embedded,
+                        "l": stats,
+                        "se": semantic_stats,
+                    });
+                    emit_success(output_mode, "resolve", data)?;
                 }
             }
         }
@@ -751,7 +1408,25 @@ async fn main() -> anyhow::Result<()> {
             
             let store = SqliteStore::open(&database)?;
             
-            println!("🚀 Coderev Server starting at http://{}", addr);
+            if output_mode.is_human() {
+                println!("🚀 Coderev Server starting at http://{}", addr);
+            } else if matches!(output_mode, OutputMode::Json) {
+                let data = serde_json::json!({
+                    "database": database.display().to_string(),
+                    "host": host,
+                    "port": port,
+                    "address": addr,
+                });
+                emit_success(output_mode, "serve", data)?;
+            } else {
+                let data = serde_json::json!({
+                    "db": database.display().to_string(),
+                    "h": host,
+                    "p": port,
+                    "a": addr,
+                });
+                emit_success(output_mode, "serve", data)?;
+            }
             coderev::server::run_server(socket_addr, store).await?;
             
             return Ok(());
@@ -760,12 +1435,43 @@ async fn main() -> anyhow::Result<()> {
         Commands::Mcp { database } => {
             let store = std::sync::Arc::new(SqliteStore::open(&database)?);
             let service = coderev::server::mcp::McpService::new(store);
+            if output_mode.is_machine() {
+                if matches!(output_mode, OutputMode::Json) {
+                    let data = serde_json::json!({
+                        "database": database.display().to_string(),
+                        "transport": "stdio",
+                    });
+                    emit_success(output_mode, "mcp", data)?;
+                } else {
+                    let data = serde_json::json!({
+                        "db": database.display().to_string(),
+                        "t": "stdio",
+                    });
+                    emit_success(output_mode, "mcp", data)?;
+                }
+            }
             service.run_stdio().await?;
         }
 
         Commands::Watch { path, database } => {
             let store = SqliteStore::open(&database)?;
+            let watch_path = path.clone();
             let watcher = coderev::watcher::Watcher::new(path, store);
+            if output_mode.is_machine() {
+                if matches!(output_mode, OutputMode::Json) {
+                    let data = serde_json::json!({
+                        "database": database.display().to_string(),
+                        "path": watch_path.display().to_string(),
+                    });
+                    emit_success(output_mode, "watch", data)?;
+                } else {
+                    let data = serde_json::json!({
+                        "db": database.display().to_string(),
+                        "p": watch_path.display().to_string(),
+                    });
+                    emit_success(output_mode, "watch", data)?;
+                }
+            }
             watcher.run()?;
         }
 
@@ -775,14 +1481,30 @@ async fn main() -> anyhow::Result<()> {
                 ensure_resolved(&store)?;
                 let engine = QueryEngine::new(&store);
                 let target_uri = coderev::uri::SymbolUri::parse(&uri)?;
-                println!("📞 Finding callers for: {} (depth: {})...", uri, depth);
                 let callers = engine.find_callers(&target_uri, depth)?;
-                if callers.is_empty() {
-                    println!("∅ No callers found.");
-                } else {
-                    for symbol in callers {
-                        println!("- [{:?}] {} ({})", symbol.kind, symbol.name, symbol.uri.to_uri_string());
+                if output_mode.is_human() {
+                    println!("📞 Finding callers for: {} (depth: {})...", uri, depth);
+                    if callers.is_empty() {
+                        println!("∅ No callers found.");
+                    } else {
+                        for symbol in &callers {
+                            println!("- [{:?}] {} ({})", symbol.kind, symbol.name, symbol.uri.to_uri_string());
+                        }
                     }
+                } else if matches!(output_mode, OutputMode::Json) {
+                    let data = ListOutput {
+                        uri,
+                        depth,
+                        results: callers.iter().map(symbol_ref).collect(),
+                    };
+                    emit_success(output_mode, "trace.callers", data)?;
+                } else {
+                    let data = ListOutputCompact {
+                        u: uri,
+                        d: depth,
+                        r: callers.iter().map(symbol_ref_compact).collect(),
+                    };
+                    emit_success(output_mode, "trace.callers", data)?;
                 }
             },
             TraceCommands::Callees { uri, database, depth } => {
@@ -790,14 +1512,30 @@ async fn main() -> anyhow::Result<()> {
                 ensure_resolved(&store)?;
                 let engine = QueryEngine::new(&store);
                 let target_uri = coderev::uri::SymbolUri::parse(&uri)?;
-                println!("📱 Finding callees for: {} (depth: {})...", uri, depth);
                 let callees = engine.find_callees(&target_uri, depth)?;
-                if callees.is_empty() {
-                    println!("∅ No callees found.");
-                } else {
-                    for symbol in callees {
-                        println!("- [{:?}] {} ({})", symbol.kind, symbol.name, symbol.uri.to_uri_string());
+                if output_mode.is_human() {
+                    println!("📱 Finding callees for: {} (depth: {})...", uri, depth);
+                    if callees.is_empty() {
+                        println!("∅ No callees found.");
+                    } else {
+                        for symbol in &callees {
+                            println!("- [{:?}] {} ({})", symbol.kind, symbol.name, symbol.uri.to_uri_string());
+                        }
                     }
+                } else if matches!(output_mode, OutputMode::Json) {
+                    let data = ListOutput {
+                        uri,
+                        depth,
+                        results: callees.iter().map(symbol_ref).collect(),
+                    };
+                    emit_success(output_mode, "trace.callees", data)?;
+                } else {
+                    let data = ListOutputCompact {
+                        u: uri,
+                        d: depth,
+                        r: callees.iter().map(symbol_ref_compact).collect(),
+                    };
+                    emit_success(output_mode, "trace.callees", data)?;
                 }
             }
         }
@@ -807,17 +1545,18 @@ async fn main() -> anyhow::Result<()> {
 }
 
 /// Helper to ensure all symbols have embeddings
-fn ensure_embeddings(store: &SqliteStore) -> anyhow::Result<()> {
+fn ensure_embeddings(store: &SqliteStore) -> anyhow::Result<usize> {
     let missing = store.find_symbols_without_embeddings()?;
+    let total = missing.len();
     if !missing.is_empty() {
         let engine = coderev::query::EmbeddingEngine::new()?;
         let batch_size = 32;
         let mut processed = 0;
-        let total = missing.len();
-        
-        println!("   Generating {} symbol embeddings...", total);
-        print!("   Progress: 0 / {}", total);
-        std::io::stdout().flush().ok();
+        if !coderev::output::is_quiet() {
+            println!("   Generating {} symbol embeddings...", total);
+            print!("   Progress: 0 / {}", total);
+            std::io::stdout().flush().ok();
+        }
         
         for chunk in missing.chunks(batch_size) {
             let embeddings = engine.embed_symbols(chunk)?;
@@ -829,25 +1568,35 @@ fn ensure_embeddings(store: &SqliteStore) -> anyhow::Result<()> {
             store.commit()?;
             
             processed += chunk.len();
-            print!("\r   Progress: {} / {}", processed, total);
-            std::io::stdout().flush().ok();
+            if !coderev::output::is_quiet() {
+                print!("\r   Progress: {} / {}", processed, total);
+                std::io::stdout().flush().ok();
+            }
         }
-        println!();
-        println!("✅ Embedding complete.");
+        if !coderev::output::is_quiet() {
+            println!();
+            println!("✅ Embedding complete.");
+        }
     }
-    Ok(())
+    Ok(total)
 }
 
 /// Helper to ensure all unresolved references are resolved
 fn ensure_resolved(store: &SqliteStore) -> anyhow::Result<()> {
     let unresolved_count = store.count_unresolved()?;
     if unresolved_count > 0 {
-        println!("🔗 On-demand: Resolving {} references...", unresolved_count);
+        if !coderev::output::is_quiet() {
+            println!("🔗 On-demand: Resolving {} references...", unresolved_count);
+        }
         let linker = coderev::linker::GlobalLinker::new(store);
         let stats = linker.run()?;
-        println!("{}", stats);
+        if !coderev::output::is_quiet() {
+            println!("{}", stats);
+        }
         
-        println!("🧠 On-demand: Running Semantic Resolver...");
+        if !coderev::output::is_quiet() {
+            println!("🧠 On-demand: Running Semantic Resolver...");
+        }
         // This requires a mutable store, but we got an immutable one.
         // We'll have to reopen it or skip.
         // For simplicity in this helper, let's reopen.

@@ -101,6 +101,16 @@ sequenceDiagram
 
 ---
 
+## Structured Output (Automation-Friendly)
+
+Coderev can emit stable, predictable output for scripts and agents:
+
+- `--json` — versioned schema (`schema_version: "1"`).
+- `--compact` — same data with shorter keys.
+- `--toon` — same as compact, just with a funnier name. We support TOON because why not.
+
+---
+
 ## MCP Integration
 
 Coderev implements the **Model Context Protocol (MCP)** so AI agents can query your codebase directly.

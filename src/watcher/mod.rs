@@ -1,8 +1,8 @@
 use notify::{Config, RecommendedWatcher, RecursiveMode, Watcher as NotifyWatcher};
 use std::path::PathBuf;
 use std::sync::mpsc::channel;
-use std::time::Duration;
 use crate::storage::SqliteStore;
+use crate::output;
 
 pub struct Watcher {
     path: PathBuf,
@@ -21,14 +21,20 @@ impl Watcher {
         
         watcher.watch(&self.path, RecursiveMode::Recursive)?;
         
-        println!("👀 Watching for changes in {:?}...", self.path);
+        if !output::is_quiet() {
+            println!("👀 Watching for changes in {:?}...", self.path);
+        }
         
         for res in rx {
             match res {
                 Ok(event) => {
                     self.handle_event(event);
                 },
-                Err(e) => println!("watch error: {:?}", e),
+                Err(e) => {
+                    if !output::is_quiet() {
+                        println!("watch error: {:?}", e);
+                    }
+                }
             }
         }
         
@@ -57,7 +63,9 @@ impl Watcher {
     fn remove_file(&self, path: &std::path::Path) {
         let relative_path = path.strip_prefix(&self.path).unwrap_or(path);
         let relative_path_str = relative_path.to_str().unwrap_or("").to_string();
-        println!("🗑️  File removed: {}", relative_path_str);
+        if !output::is_quiet() {
+            println!("🗑️  File removed: {}", relative_path_str);
+        }
         self.store.delete_file_data(&relative_path_str).ok();
     }
 
@@ -85,7 +93,9 @@ impl Watcher {
             }
         }
 
-        println!("📝 Processing change: {}", relative_path_str);
+        if !output::is_quiet() {
+            println!("📝 Processing change: {}", relative_path_str);
+        }
 
         // Delete old data
         self.store.delete_file_data(&relative_path_str).ok();
@@ -140,6 +150,8 @@ impl Watcher {
         }
         
         self.store.update_file_hash(&relative_path_str, &hash).ok();
-        println!("✅ Updated: {}", relative_path_str);
+        if !output::is_quiet() {
+            println!("✅ Updated: {}", relative_path_str);
+        }
     }
 }

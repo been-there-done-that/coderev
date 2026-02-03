@@ -5,6 +5,7 @@ use crate::uri::SymbolUri;
 use std::collections::HashSet;
 use std::fmt;
 
+#[derive(Debug, Clone, serde::Serialize)]
 pub struct GlobalLinkerStats {
     pub resolved: usize,
     pub ambiguous: usize,
