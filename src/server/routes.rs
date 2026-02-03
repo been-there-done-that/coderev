@@ -111,3 +111,17 @@ pub async fn handle_stats(State(state): State<Arc<AppState>>) -> Result<Json<ser
     
     Ok(Json(serde_json::to_value(&stats).map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, Json(ErrorResponse { error: e.to_string() })))?))
 }
+
+pub async fn handle_analyze(
+    State(state): State<Arc<AppState>>,
+    Query(params): Query<UriParams>,
+) -> Result<Json<serde_json::Value>, (StatusCode, Json<ErrorResponse>)> {
+    let uri = SymbolUri::parse(&params.uri)
+        .map_err(|e| (StatusCode::BAD_REQUEST, Json(ErrorResponse { error: e.to_string() })))?;
+
+    let engine = QueryEngine::new(&state.store);
+    let analysis = engine.analyze_symbol(&uri)
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, Json(ErrorResponse { error: e.to_string() })))?;
+
+    Ok(Json(serde_json::to_value(&analysis).map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, Json(ErrorResponse { error: e.to_string() })))?))
+}

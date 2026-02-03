@@ -31,6 +31,7 @@ pub async fn run_server(addr: SocketAddr, store: SqliteStore) -> anyhow::Result<
         .route("/api/v1/search", get(routes::handle_search))
         .route("/api/v1/trace", get(routes::handle_trace))
         .route("/api/v1/impact", get(routes::handle_impact))
+        .route("/api/v1/analyze", get(routes::handle_analyze))
         .route("/api/v1/stats", get(routes::handle_stats))
         .layer(TraceLayer::new_for_http())
         .layer(cors)

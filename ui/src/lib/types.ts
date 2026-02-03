@@ -25,3 +25,8 @@ export interface ImpactResult {
     edge_kind: string;
     confidence: number;
 }
+export interface AnalysisResult {
+    summary: string;
+    importance: number;
+    module_role: string;
+}

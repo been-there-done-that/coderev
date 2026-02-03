@@ -107,19 +107,43 @@
 							</h2>
 						</div>
 						<div class="flex flex-1 flex-col items-center justify-center px-6 text-center">
-							<div
-								class="mb-6 flex h-16 w-16 animate-pulse items-center justify-center rounded-full border-2 border-dashed border-brand-primary/30"
-							>
+							{#if graphState.isAnalysisLoading}
 								<div
-									class="h-8 w-8 rounded-full border border-brand-primary/10 bg-brand-primary/5"
-								></div>
-							</div>
-							<p class="text-[11px] font-bold tracking-[0.3em] text-text-secondary/60 uppercase">
-								Synthesizing Architecture...
-							</p>
-							<p class="mt-4 text-[10px] leading-relaxed text-text-secondary/40">
-								Analyzing usage patterns and control flow to infer high-level structure.
-							</p>
+									class="mb-6 flex h-16 w-16 animate-pulse items-center justify-center rounded-full border-2 border-dashed border-brand-primary/30"
+								>
+									<div
+										class="h-8 w-8 rounded-full border border-brand-primary/10 bg-brand-primary/5"
+									></div>
+								</div>
+								<p class="text-[11px] font-bold tracking-[0.3em] text-text-secondary/60 uppercase">
+									Synthesizing Architecture...
+								</p>
+							{:else if graphState.analysis}
+								<div class="mb-4 flex w-full flex-col items-center">
+									<span
+										class="mb-2 text-[10px] font-bold tracking-widest text-brand-primary uppercase"
+										>Importance</span
+									>
+									<div
+										class="relative h-2 w-32 overflow-hidden rounded-full bg-white/5 shadow-inner"
+									>
+										<div
+											class="absolute top-0 left-0 h-full bg-brand-primary transition-all duration-1000"
+											style="width: {graphState.analysis.importance * 10}%"
+										></div>
+									</div>
+								</div>
+								<p class="text-xs leading-relaxed text-text-primary/80">
+									{graphState.analysis.summary}
+								</p>
+								<div
+									class="mt-6 rounded-lg bg-white/5 px-3 py-1 text-[10px] font-bold text-text-secondary uppercase"
+								>
+									Role: {graphState.analysis.module_role}
+								</div>
+							{:else}
+								<p class="text-[10px] text-text-secondary/40 italic">Analysis unavailable</p>
+							{/if}
 						</div>
 					</section>
 				</div>
