@@ -1,110 +1,161 @@
-# Coderev: Universal Code Intelligence Substrate
+# Coderev — Universal Code Intelligence Substrate
 
-> **"A semantic code graph with AI search"**
+**Coderev builds a verified semantic code graph so you can search, trace, and reason about code like a compiler would.**
 
-Coderev is a semantic code graph engine designed for deep code understanding. Unlike standard text-search tools, Coderev builds a verified graph of symbols and relationships, enabling precise navigation, impact analysis, and AI-powered search that actually understands your architecture.
+Coderev is a local-first engine that parses your repository, resolves symbol relationships, and stores a queryable graph in SQLite. It adds AI-assisted search on top of real call graphs — so results are grounded in your codebase, not just text similarity.
 
 ---
 
-## 🚀 Quick Start Guide
+## Highlights
 
-Coderev is designed to behave like a compiler. You give it your source code, and it produces a persistent intelligence layer.
+- **Compiler-grade graph**: Symbols, definitions, references, callers, callees, and impact paths.
+- **Local AI search**: Semantic search over real symbols and their implementation context.
+- **MCP-ready**: Connect AI agents via the Model Context Protocol.
+- **Live indexing**: Watch mode keeps your graph fresh.
+- **SQLite substrate**: Build your own tooling on top of an open, inspectable store.
 
-### 1. Index your Code
-This is the unified command that parses your code, builds the call graph, and generates semantic embeddings.
+---
+
+## What Coderev Supports
+
+### Language Coverage
+
+- **Deep AST support**: `Python`
+- **Baseline parsing**: `JavaScript`, `TypeScript`, `Rust`, `Go`
+- **Semantic fallback**: All other text-based files are indexed via chunking to keep full repository coverage.
+
+### Interfaces
+
+- **CLI**: Index, search, trace, impact, resolve, stats
+- **MCP server**: AI agent integration over stdio
+- **HTTP server + UI**: Local UI served by `coderev serve`
+
+---
+
+## Quick Start
+
+### 1) Index a repository
+
 ```bash
 cargo run -- index --path /path/to/your/project --database coderev.db
 ```
-**What happens under the hood:**
-- **Phase 1 (Extract)**: Parses source files to identify symbols (functions, classes, variables).
-- **Phase 2 (Link)**: Resolves references to build a verified call graph.
-- **Phase 3 (Embed)**: Generates mathematical vectors (embeddings) for AI search.
 
-### 2. Search and Explore
-Once indexed, you can query your code conceptually or structurally.
+### 2) Search semantically
 
-#### Semantic (AI) Search
-Ask questions about your code's purpose.
 ```bash
-cargo run -- search --query "how does auth work?" --vector
+cargo run -- search --query "how does auth work?"
 ```
 
-#### Graph Analysis
-Find actual callers of a function (verified by the graph, not just grep).
+### 3) Trace callers / callees
+
 ```bash
-cargo run -- trace callers --uri "codescope://my-repo/src/auth.py#callable:validate_login@10"
+cargo run -- callers --uri "codescope://my-repo/src/auth.py#callable:validate_login@10"
 ```
 
 ---
 
-## 🤖 AI Agent Integration (MCP)
+## How It Works (Illustrated)
 
-Coderev implements the **Model Context Protocol (MCP)**, allowing AI agents (like Claude Desktop or Cursor) to directly query your codebase.
+### End-to-end pipeline
 
-### Run the MCP Server
-```bash
-cargo run -- mcp
+```mermaid
+graph TD
+    A[Repo Files] --> B[Tree-sitter Parsers]
+    B --> C[Symbol + Scope Extraction]
+    C --> D[(SQLite Graph Store)]
+    D --> E[Resolver: callers/callees]
+    E --> D
+    D --> F[FastEmbed Vectors]
+    F --> D
+    D --> G[Query Engine]
 ```
-Configure your agent to use this command as an MCP server. The agent will gain access to:
-- `search_code`: Find relevant code by concept.
-- `get_callers` / `get_callees`: Navigate the call graph.
-- `get_impact`: Analyze change impact.
 
----
+### Query flow
 
-## ⚡️ Real-time Indexing
-
-Keep your index fresh automatically with the watcher daemon.
-
-```bash
-cargo run -- watch --path /path/to/your/project
+```mermaid
+sequenceDiagram
+    actor Dev
+    Dev->>Coderev: search("auth validation")
+    Coderev->>SQLite: fetch symbols + vectors
+    SQLite-->>Coderev: symbol matches
+    Coderev-->>Dev: ranked results w/ URIs
 ```
-This listens for file changes and incrementally updates the graph, so your AI always has the latest context.
 
 ---
 
-## 🔍 Competitive Depth: Coderev vs. Coderev
-
-Coderev is what code search looks like when built by compiler engineers.
-
-| Feature | Coderev / Vector Search | Coderev |
-| :--- | :--- | :--- |
-| **Foundation** | Chunks of text | Semantic Code Graph |
-| **Search** | Vector guessing | Vector over verified symbols |
-| **Logic** | None | Real call graphs & reachability |
-| **Reliability** | "Hallucinates" relationships | Verified symbol relationships |
-| **AI Protocol** | Custom | **Standard MCP** |
-| **Updates** | Manual | **Live Watcher** |
-
----
-
-## 🛠️ Technical Details
-
-### Language Support
-Coderev provides varying levels of depth depending on the language:
-
-- **Deep AST Support**: `Python` (Full symbol extraction and scope resolution).
-- **Planned Depth**: `JavaScript`, `TypeScript`, `Rust`, `Go`.
-- **Universal Fallback**: All other files (SQL, YAML, Markdown, Terraform, etc.) are indexed using a **semantic fallback chunker**. You never lose coverage, but supported languages get "compiler-grade" precision.
-
-### Why "Substrate"?
-Coderev isn't just a search tool; it's a foundation for other tools. Because it exports a clean SQLite-based graph, you can build custom linters, auto-refactorers, or documentation generators on top of it.
-
----
-
-## 📊 Useful Commands
+## CLI Reference (Core)
 
 | Command | Purpose |
 | :--- | :--- |
-| `index` | **Primary Entry**: Full pipeline (parse → link → embed). |
-| `watch` | **Live Mode**: Incrementally update index on file changes. |
-| `search` | Find code via keywords or semantic meaning. |
-| `trace` | Analyze `callers` or `callees` of a symbol. |
-| `impact` | Analyze dependencies (blast radius) of a change. |
-| `mcp` | Start Standard MCP server for AI agents. |
-| `serve` | Start HTTP server for the UI. |
-| `stats` | Show graph density and language distribution. |
+| `index` | Parse → resolve → embed your repository. |
+| `search` | Semantic or exact search over symbols. |
+| `embed` | Generate embeddings (default model: `all-MiniLM-L6-v2`). |
+| `callers` / `callees` | Traverse the verified call graph. |
+| `impact` | BFS traversal for change impact analysis. |
+| `resolve` | Resolve deferred references after indexing. |
+| `stats` | Inspect index and symbol coverage. |
+| `watch` | Incremental updates on file change. |
+| `serve` | Serve API + UI locally. |
+| `mcp` | Start MCP server over stdio. |
+| `trace callers|callees` | Alias for callers/callees. |
 
 ---
 
-> *"Coderev is what Coderev would look like if it were built by compiler engineers."*
+## MCP Integration
+
+Coderev implements the **Model Context Protocol (MCP)** so AI agents can query your codebase directly.
+
+```bash
+cargo run -- mcp --database coderev.db
+```
+
+MCP tools include:
+- `search_code`
+- `get_callers`
+- `get_callees`
+- `get_impact`
+
+---
+
+## UI (Local)
+
+Run the local UI + API server:
+
+```bash
+cargo run -- serve --database coderev.db
+```
+
+UI assets live in `ui/` and are served by the backend when built.
+
+---
+
+## Design Principles
+
+- **Grounded graph first**: No hallucinated relationships.
+- **Local-first**: Everything runs on your machine.
+- **Composable substrate**: The SQLite schema is the stable foundation.
+
+---
+
+## Repository Layout
+
+- `src/` — Rust core (indexing, graph, resolver, query)
+- `ui/` — Svelte UI
+- `queries/` — query logic and experiments
+- `test_*` — fixtures and test data
+
+---
+
+## Contributing
+
+Contributions welcome — especially in:
+- JS/TS/Rust/Go adapters
+- Incremental indexing performance
+- Vector index acceleration
+- UI polish and usability
+
+---
+
+## License
+
+MIT
