@@ -69,9 +69,9 @@ enum Commands {
         #[arg(short, long)]
         kind: Option<String>,
 
-        /// Use vector search (requires embeddings)
-        #[arg(short = 'V', long)]
-        vector: bool,
+        /// Use exact text match only (disable vector search)
+        #[arg(long)]
+        exact: bool,
     },
 
     /// Generate embeddings for symbols
@@ -252,6 +252,7 @@ async fn main() -> anyhow::Result<()> {
 
     match cli.command {
         Commands::Index { path, database, repo } => {
+            let total_start = std::time::Instant::now();
             tracing::info!("Indexing {} into {:?}", path.display(), database);
             let repo_name = repo.unwrap_or_else(|| {
                 path.file_name()
@@ -268,6 +269,8 @@ async fn main() -> anyhow::Result<()> {
             
             // Channel for worker-to-coordinator communication
             let (tx, rx) = std::sync::mpsc::channel::<IndexMessage>();
+            
+            let start_indexing = std::time::Instant::now();
             
             // Configure file walker
             let walker = ignore::WalkBuilder::new(&path)
@@ -449,6 +452,7 @@ async fn main() -> anyhow::Result<()> {
             println!("   Modified:  {}", stats.modified);
             println!("   Deleted:   {}", stats.deleted);
             println!("   Errors:    {}", stats.errors);
+            println!("   ⏱️  Indexing took: {:?}", start_indexing.elapsed());
 
             // Phase 2: Linking
             let something_changed = stats.added > 0 || stats.modified > 0 || stats.deleted > 0;
@@ -470,15 +474,18 @@ async fn main() -> anyhow::Result<()> {
                 // Edges *to* modified files are also gone (handled in delete_file_data).
                 
                 println!("\n🔗 Phase 2: Running Global Linker...");
+                let start_linking = std::time::Instant::now();
                 let linker = coderev::linker::GlobalLinker::new(&store);
                 let stats = linker.run()?;
                 println!("{}", stats);
+                println!("   ⏱️  Linking took: {:?}", start_linking.elapsed());
                 
                 // Phase 3: Embeddings
                 // Only for new symbols
                 let symbols_to_embed = store.find_symbols_without_embeddings()?;
                 if !symbols_to_embed.is_empty() {
                     println!("\n🧠 Phase 3: Generating Embeddings ({} new symbols)...", symbols_to_embed.len());
+                    let start_embeddings = std::time::Instant::now();
                     let engine = coderev::query::EmbeddingEngine::new()?;
                     let batch_size = 32;
                     let mut processed = 0;
@@ -494,17 +501,20 @@ async fn main() -> anyhow::Result<()> {
                         std::io::stdout().flush().ok();
                     }
                     println!(); // New line after progress
+                    println!("   ⏱️  Embeddings took: {:?}", start_embeddings.elapsed());
                 }
 
                 // Phase 4: Semantic Resolution
                 // Again, only if needed.
                  println!("\n🧠 Phase 4: Running Semantic Resolver...");
+                let start_semantic = std::time::Instant::now();
                 let engine = coderev::query::EmbeddingEngine::new()?;
                 let semantic_linker = coderev::linker::SemanticLinker::new(&store, &engine);
                 let stats = semantic_linker.run()?;
                 if stats.resolved > 0 {
                     println!("✅ Semantic Resolved: {}", stats.resolved);
                 }
+                println!("   ⏱️  Semantic Resolution took: {:?}", start_semantic.elapsed());
             } else {
                 println!("\n✨ Repository is up to date.");
             }
@@ -512,9 +522,10 @@ async fn main() -> anyhow::Result<()> {
             // Show final stats
             let final_stats = store.stats()?;
             println!("\n{}", final_stats);
+            println!("\n⏱️  Total time: {:?}", total_start.elapsed());
         }
 
-        Commands::Search { query, database, limit, kind, vector } => {
+        Commands::Search { query, database, limit, kind, exact } => {
             let store = SqliteStore::open(&database)?;
             
             let parsed_kind = if let Some(ref k) = kind {
@@ -524,27 +535,64 @@ async fn main() -> anyhow::Result<()> {
                 None
             };
 
-            let results = if vector && !query.trim().is_empty() {
-                // Ensure embeddings exist before searching
+            let results = if !exact && !query.trim().is_empty() {
+                // Ensure embeddings exist before searching.
+                // If they don't exist, we should probably generate them or fall back?
+                // Given the user instruction "assume vector is the only way", let's prioritize it.
+                // But if the store has NO embeddings, we should perhaps warn or auto-generate?
+                // ensure_embeddings(&store)?; // This Auto-generates.
+                
+                // Let's check if we have embeddings first to avoid surprise long waits?
+                // User said "defaultly assume... unless we turn it off". 
+                // That implies we SHOULD use it. So ensure_embeddings is correct.
+                // But ensure_embeddings prints progress, so the user knows what's happening.
                 ensure_embeddings(&store)?;
                 
                 println!("🧠 [Local Embedding] Searching for: '{}'...", query);
                 let engine = QueryEngine::new(&store);
-                let embedding_engine = coderev::query::EmbeddingEngine::new()?;
-                let query_vector = embedding_engine.embed_query(&query)?;
-                engine.search_by_vector(&query_vector, limit)?
+                match coderev::query::EmbeddingEngine::new() {
+                    Ok(embedding_engine) => {
+                         match embedding_engine.embed_query(&query) {
+                            Ok(query_vector) => engine.search_by_vector(&query_vector, limit)?,
+                            Err(e) => {
+                                eprintln!("⚠️  Embedding Generation Failed: {}", e);
+                                println!("🔍 Falling back to exact text search...");
+                                store.search_content(&query, parsed_kind, limit)? // Fallback
+                                    .into_iter()
+                                    .map(|s| coderev::query::engine::QueryResult::new(s, 1.0))
+                                    .collect()
+                            }
+                         }
+                    },
+                    Err(e) => {
+                         eprintln!("⚠️  Failed to initialize Embedding Engine: {}", e);
+                         println!("🔍 Falling back to exact text search...");
+                         store.search_content(&query, parsed_kind, limit)? // Fallback
+                            .into_iter()
+                            .map(|s| coderev::query::engine::QueryResult::new(s, 1.0))
+                            .collect()
+                    }
+                }
             } else {
-                // Default: search in name, content, and doc fields
-                // Also fallback here if query is empty to get recent symbols
-                println!("🔍 Searching for: '{}' (kind: {:?}, limit: {})...", query, kind, limit);
+                // Exact search requested
+                println!("🔍 [Exact Match] Searching for: '{}' (kind: {:?}, limit: {})...", query, kind, limit);
                 store.search_content(&query, parsed_kind, limit)?
                     .into_iter()
                     .map(|s| coderev::query::engine::QueryResult::new(s, 1.0))
                     .collect()
             };
 
+            // No fallbacks needed mostly as we start with vector. 
+            // But if vector returns empty? 
+            // Semantic search might return "somewhat relevant" things even if bad match.
+            // If vector returns empty, it means no embeddings or threshold? (search_by_vector has no threshold currently, just sorts).
+            
             if results.is_empty() {
                 println!("❌ No symbols found.");
+                if !exact {
+                     // If we tried vector and found nothing, maybe try text?
+                     // Vector search usually returns *something* unless DB is empty.
+                }
             } else {
                 for res in results {
                     let uri_str = res.symbol.uri.to_uri_string();

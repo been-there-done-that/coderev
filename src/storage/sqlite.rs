@@ -466,37 +466,40 @@ impl SqliteStore {
 
     /// Search for symbols by vector similarity
     pub fn search_by_vector(&self, query_vector: &[f32], limit: usize) -> Result<Vec<(Symbol, f32)>> {
-        let conn = self.lock_conn()?;
-        let mut stmt = conn.prepare(
-            "SELECT e.uri, e.vector, s.path FROM embeddings e JOIN symbols s ON e.uri = s.uri"
-        )?;
-        
-        // Fetch all candidates
-        let candidates = stmt.query_map([], |row| {
-            let uri_str: String = row.get(0)?;
-            let blob: Vec<u8> = row.get(1)?;
-            let path: String = row.get(2)?;
-            let vector: Vec<f32> = blob.chunks(4)
-                .map(|chunk| f32::from_le_bytes([chunk[0], chunk[1], chunk[2], chunk[3]]))
-                .collect();
-            Ok((uri_str, vector, path))
-        })?;
-
-        let mut scored_results = Vec::new();
-        for candidate in candidates {
-            if let Ok((uri_str, vector, path)) = candidate {
-                let base_score = self.cosine_similarity(query_vector, &vector);
-                let boost = self.get_file_boost(&path);
-                let boosted_score = base_score * boost;
-                
-                scored_results.push((uri_str, boosted_score));
+        let scored_results = {
+            let conn = self.lock_conn()?;
+            let mut stmt = conn.prepare(
+                "SELECT e.uri, e.vector, s.path FROM embeddings e JOIN symbols s ON e.uri = s.uri"
+            )?;
+            
+            // Fetch all candidates
+            let candidates = stmt.query_map([], |row| {
+                let uri_str: String = row.get(0)?;
+                let blob: Vec<u8> = row.get(1)?;
+                let path: String = row.get(2)?;
+                let vector: Vec<f32> = blob.chunks(4)
+                    .map(|chunk| f32::from_le_bytes([chunk[0], chunk[1], chunk[2], chunk[3]]))
+                    .collect();
+                Ok((uri_str, vector, path))
+            })?;
+            
+            let mut results = Vec::new();
+            for candidate in candidates {
+                if let Ok((uri_str, vector, path)) = candidate {
+                    let base_score = self.cosine_similarity(query_vector, &vector);
+                    let boost = self.get_file_boost(&path);
+                    let boosted_score = base_score * boost;
+                    
+                    results.push((uri_str, boosted_score));
+                }
             }
-        }
-
-        // Sort by boosted score descending
-        scored_results.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+            
+            // Sort by boosted score descending
+            results.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+            results
+        };
         
-        // Take top N and fetch symbols
+        // Take top N and fetch symbols (outside the lock)
         let mut final_results = Vec::new();
         for (uri_str, score) in scored_results.into_iter().take(limit) {
             let uri = SymbolUri::parse(&uri_str)?;
@@ -504,7 +507,6 @@ impl SqliteStore {
                 final_results.push((symbol, score));
             }
         }
-
         Ok(final_results)
     }
 
