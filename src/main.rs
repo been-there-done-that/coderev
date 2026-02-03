@@ -166,6 +166,60 @@ enum Commands {
         #[arg(short = 'H', long, default_value = "127.0.0.1")]
         host: String,
     },
+
+    /// Run the MCP server over stdio
+    Mcp {
+        /// Path to the database file
+        #[arg(short, long, default_value = "coderev.db")]
+        database: PathBuf,
+    },
+
+    /// Watch for file changes and incrementally index
+    Watch {
+        /// Path to the repository or directory to watch
+        #[arg(short, long)]
+        path: PathBuf,
+
+        /// Path to the database file
+        #[arg(short, long, default_value = "coderev.db")]
+        database: PathBuf,
+    },
+
+    /// Trace calls (alias for callers/callees)
+    #[command(subcommand)]
+    Trace(TraceCommands),
+}
+
+#[derive(Subcommand)]
+enum TraceCommands {
+    /// Find callers
+    Callers {
+        /// Symbol URI
+        #[arg(short, long)]
+        uri: String,
+
+        /// Path to the database file
+        #[arg(short, long, default_value = "coderev.db")]
+        database: PathBuf,
+
+        /// Maximum depth
+        #[arg(long, default_value = "1")]
+        depth: usize,
+    },
+    /// Find callees
+    Callees {
+        /// Symbol URI
+        #[arg(short, long)]
+        uri: String,
+
+        /// Path to the database file
+        #[arg(short, long, default_value = "coderev.db")]
+        database: PathBuf,
+
+        /// Maximum depth
+        #[arg(long, default_value = "1")]
+        depth: usize,
+    },
 }
 
 #[derive(Default)]
@@ -653,6 +707,51 @@ async fn main() -> anyhow::Result<()> {
             coderev::server::run_server(socket_addr, store).await?;
             
             return Ok(());
+        }
+
+        Commands::Mcp { database } => {
+            let store = std::sync::Arc::new(SqliteStore::open(&database)?);
+            let service = coderev::server::mcp::McpService::new(store);
+            service.run_stdio().await?;
+        }
+
+        Commands::Watch { path, database } => {
+            let store = SqliteStore::open(&database)?;
+            let watcher = coderev::watcher::Watcher::new(path, store);
+            watcher.run()?;
+        }
+
+        Commands::Trace(cmd) => match cmd {
+            TraceCommands::Callers { uri, database, depth } => {
+                let store = SqliteStore::open(&database)?;
+                ensure_resolved(&store)?;
+                let engine = QueryEngine::new(&store);
+                let target_uri = coderev::uri::SymbolUri::parse(&uri)?;
+                println!("📞 Finding callers for: {} (depth: {})...", uri, depth);
+                let callers = engine.find_callers(&target_uri, depth)?;
+                if callers.is_empty() {
+                    println!("∅ No callers found.");
+                } else {
+                    for symbol in callers {
+                        println!("- [{:?}] {} ({})", symbol.kind, symbol.name, symbol.uri.to_uri_string());
+                    }
+                }
+            },
+            TraceCommands::Callees { uri, database, depth } => {
+                let store = SqliteStore::open(&database)?;
+                ensure_resolved(&store)?;
+                let engine = QueryEngine::new(&store);
+                let target_uri = coderev::uri::SymbolUri::parse(&uri)?;
+                println!("📱 Finding callees for: {} (depth: {})...", uri, depth);
+                let callees = engine.find_callees(&target_uri, depth)?;
+                if callees.is_empty() {
+                    println!("∅ No callees found.");
+                } else {
+                    for symbol in callees {
+                        println!("- [{:?}] {} ({})", symbol.kind, symbol.name, symbol.uri.to_uri_string());
+                    }
+                }
+            }
         }
     }
 

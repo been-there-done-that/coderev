@@ -11,6 +11,7 @@ use crate::storage::SqliteStore;
 use std::sync::Arc;
 
 pub mod routes;
+pub mod mcp;
 
 pub struct AppState {
     pub store: Arc<SqliteStore>,

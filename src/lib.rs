@@ -19,6 +19,7 @@ pub mod adapter;
 pub mod query;
 pub mod linker;
 pub mod server;
+pub mod watcher;
 
 
 // Re-exports for convenient access
