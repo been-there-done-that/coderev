@@ -470,7 +470,7 @@ async fn main() -> anyhow::Result<()> {
                 None
             };
 
-            let results = if vector {
+            let results = if vector && !query.trim().is_empty() {
                 // Ensure embeddings exist before searching
                 ensure_embeddings(&store)?;
                 
@@ -481,6 +481,7 @@ async fn main() -> anyhow::Result<()> {
                 engine.search_by_vector(&query_vector, limit)?
             } else {
                 // Default: search in name, content, and doc fields
+                // Also fallback here if query is empty to get recent symbols
                 println!("🔍 Searching for: '{}' (kind: {:?}, limit: {})...", query, kind, limit);
                 store.search_content(&query, parsed_kind, limit)?
                     .into_iter()
