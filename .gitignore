@@ -2,3 +2,7 @@
 *.db
 .fastembed_cache/*
 .coderev/
+.coderev/
+bench/results/
+bench/rag_index.jsonl
+.DS_Store

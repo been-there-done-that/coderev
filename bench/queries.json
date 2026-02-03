@@ -1,0 +1,27 @@
+[
+  {
+    "id": "watch-background",
+    "query": "watch background",
+    "question": "How does background watch mode work and where is it implemented?"
+  },
+  {
+    "id": "mcp-server",
+    "query": "mcp server",
+    "question": "Where is the MCP server created and how is it started?"
+  },
+  {
+    "id": "embedding-resolver",
+    "query": "embedding resolver",
+    "question": "How does the semantic resolver use embeddings?"
+  },
+  {
+    "id": "agent-setup",
+    "query": "agent setup mcp config",
+    "question": "What does agent setup generate and where is it written?"
+  },
+  {
+    "id": "default-db",
+    "query": "default database .coderev",
+    "question": "What is the default database path and how is it created?"
+  }
+]

@@ -16,6 +16,17 @@ Coderev is a local-first engine that parses your repository, resolves symbol rel
 
 ---
 
+## Why Coderev
+
+Coderev isn’t “just another semantic search.” It’s **graph‑grounded retrieval**:
+- **Verified structure**: Callers, callees, and impact paths come from a semantic graph, not guessed from chunks.
+- **Better LLM context**: Symbols and relationships map to how engineers reason about code.
+- **Local‑first + deterministic**: You can inspect and trust the substrate.
+
+See `WHY_Coderev.md` for a concise positioning and benchmark highlights.
+
+---
+
 ## What Coderev Supports
 
 ### Language Coverage
@@ -203,6 +214,21 @@ cargo run -- watch --stop
 ```
 
 Daemon state lives in `.coderev/` (`coderev-watch.pid`, `coderev-watch.log`).
+
+---
+
+## Benchmarking
+
+Reproducible benchmark suite (Coderev vs coderev vs rg vs RAG):
+
+```bash
+bench/run_all.sh
+python3 bench/report.py
+```
+
+Outputs:
+- `bench/results/` (raw artifacts)
+- `bench/REPORT.md` (summary table)
 
 ---
 
