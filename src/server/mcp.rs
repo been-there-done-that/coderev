@@ -1,30 +1,47 @@
+//! MCP server implementation with direct JSON-RPC handling
+//! This bypasses the mcp_sdk_rs server to allow simpler initialization like coderev
+
 use std::sync::Arc;
 use crate::storage::SqliteStore;
 use crate::query::QueryEngine;
-use mcp_sdk_rs::server::{Server, ServerHandler};
-use mcp_sdk_rs::types::{
-    Tool, ToolResult, ListToolsResult,
-    Implementation, ClientCapabilities, ServerCapabilities
-};
-use mcp_sdk_rs::error::ErrorCode;
-use mcp_sdk_rs::transport::stdio::StdioTransport;
-use mcp_sdk_rs::error::Error;
-use async_trait::async_trait;
-use serde_json::Value;
-use tokio::sync::mpsc;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
+use serde_json::Value;
 
 #[derive(Deserialize)]
-struct CallToolRequest {
-    name: String,
-    arguments: Option<Value>,
+struct JsonRpcRequest {
+    jsonrpc: String,
+    id: Option<Value>,
+    method: String,
+    params: Option<Value>,
+}
+
+#[derive(Serialize)]
+struct JsonRpcResponse {
+    jsonrpc: &'static str,
+    id: Value,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    result: Option<Value>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    error: Option<JsonRpcError>,
+}
+
+#[derive(Serialize)]
+struct JsonRpcError {
+    code: i32,
+    message: String,
 }
 
 #[derive(Deserialize)]
 struct SearchArgs {
     query: String,
     limit: Option<u32>,
+}
+
+#[derive(Deserialize)]
+struct GraphArgs {
+    uri: String,
+    depth: Option<u32>,
 }
 
 pub struct McpService {
@@ -37,220 +54,306 @@ impl McpService {
     }
 
     pub async fn run_stdio(&self) -> anyhow::Result<()> {
-        let (read_tx, read_rx) = mpsc::channel::<String>(32);
-        let (write_tx, mut write_rx) = mpsc::channel::<String>(32);
+        let stdin = tokio::io::stdin();
+        let mut stdout = tokio::io::stdout();
+        let mut reader = BufReader::new(stdin).lines();
 
-        // Stdin reader
-        tokio::spawn(async move {
-            let stdin = tokio::io::stdin();
-            let mut reader = BufReader::new(stdin).lines();
-            while let Ok(Some(line)) = reader.next_line().await {
-                if read_tx.send(line).await.is_err() {
-                    break;
+        while let Ok(Some(line)) = reader.next_line().await {
+            if line.trim().is_empty() {
+                continue;
+            }
+
+            let response = match serde_json::from_str::<JsonRpcRequest>(&line) {
+                Ok(req) => self.handle_request(req).await,
+                Err(e) => JsonRpcResponse {
+                    jsonrpc: "2.0",
+                    id: Value::Null,
+                    result: None,
+                    error: Some(JsonRpcError {
+                        code: -32700,
+                        message: format!("Parse error: {}", e),
+                    }),
+                },
+            };
+
+            // Only send response if there was an id (not a notification)
+            if response.id != Value::Null || response.error.is_some() {
+                let json = serde_json::to_string(&response)?;
+                stdout.write_all(json.as_bytes()).await?;
+                stdout.write_all(b"\n").await?;
+                stdout.flush().await?;
+            }
+        }
+
+        Ok(())
+    }
+
+    async fn handle_request(&self, req: JsonRpcRequest) -> JsonRpcResponse {
+        let id = req.id.clone().unwrap_or(Value::Null);
+        
+        match req.method.as_str() {
+            "initialize" => {
+                JsonRpcResponse {
+                    jsonrpc: "2.0",
+                    id,
+                    result: Some(serde_json::json!({
+                        "protocolVersion": "2024-11-05",
+                        "serverInfo": {
+                            "name": "coderev",
+                            "version": "1.0.0"
+                        },
+                        "capabilities": {
+                            "tools": {}
+                        }
+                    })),
+                    error: None,
                 }
             }
-        });
-
-        // Stdout writer
-        tokio::spawn(async move {
-            let mut stdout = tokio::io::stdout();
-            while let Some(msg) = write_rx.recv().await {
-                let _ = stdout.write_all(msg.as_bytes()).await;
-                let _ = stdout.write_all(b"\n").await;
-                let _ = stdout.flush().await;
+            "notifications/initialized" | "initialized" => {
+                // No response for notifications
+                JsonRpcResponse {
+                    jsonrpc: "2.0",
+                    id: Value::Null,
+                    result: None,
+                    error: None,
+                }
             }
-        });
-
-        let transport = StdioTransport::new(read_rx, write_tx);
-        let server = Server::new(Arc::new(transport), Arc::new(self.clone()));
-        server.start().await?;
-        Ok(())
-    }
-}
-
-impl Clone for McpService {
-    fn clone(&self) -> Self {
-        Self { store: self.store.clone() }
-    }
-}
-
-#[derive(Deserialize)]
-struct GraphArgs {
-    uri: String,
-    depth: Option<u32>,
-}
-
-#[async_trait]
-impl ServerHandler for McpService {
-    async fn initialize(
-        &self, 
-        _implementation: Implementation, 
-        _capabilities: ClientCapabilities
-    ) -> Result<ServerCapabilities, Error> {
-        Ok(ServerCapabilities::default())
-    }
-
-    async fn shutdown(&self) -> Result<(), Error> {
-        Ok(())
-    }
-
-    async fn handle_method(&self, method: &str, params: Option<Value>) -> Result<Value, Error> {
-        match method {
             "tools/list" => {
-                let tools = vec![
-                    Tool { 
-                        name: "search_code".to_string(), 
-                        description: "Search for code symbols by name".to_string(),
-                        input_schema: serde_json::from_value(serde_json::json!({
-                            "type": "object",
-                            "properties": {
-                                "query": { "type": "string" },
-                                "limit": { "type": "integer" }
-                            },
-                            "required": ["query"]
-                        })).map_err(|e| Error::protocol(ErrorCode::ParseError, e.to_string()))?,
-                        annotations: None,
-                    },
-                    Tool {
-                        name: "get_callers".to_string(),
-                        description: "Find callers of a function".to_string(),
-                        input_schema: serde_json::from_value(serde_json::json!({
-                            "type": "object",
-                            "properties": {
-                                "uri": { "type": "string" },
-                                "depth": { "type": "integer" }
-                            },
-                            "required": ["uri"]
-                        })).map_err(|e| Error::protocol(ErrorCode::ParseError, e.to_string()))?,
-                        annotations: None,
-                    },
-                    Tool {
-                        name: "get_callees".to_string(),
-                        description: "Find callees of a function".to_string(),
-                        input_schema: serde_json::from_value(serde_json::json!({
-                            "type": "object",
-                            "properties": {
-                                "uri": { "type": "string" },
-                                "depth": { "type": "integer" }
-                            },
-                            "required": ["uri"]
-                        })).map_err(|e| Error::protocol(ErrorCode::ParseError, e.to_string()))?,
-                        annotations: None,
-                    },
-                    Tool {
-                        name: "get_impact".to_string(),
-                        description: "Analyze impact of changes to a symbol".to_string(),
-                        input_schema: serde_json::from_value(serde_json::json!({
-                            "type": "object",
-                            "properties": {
-                                "uri": { "type": "string" },
-                                "depth": { "type": "integer" }
-                            },
-                            "required": ["uri"]
-                        })).map_err(|e| Error::protocol(ErrorCode::ParseError, e.to_string()))?,
-                        annotations: None,
-                    }
-                ];
-                let result = ListToolsResult { tools, next_cursor: None };
-                serde_json::to_value(result).map_err(|e| Error::protocol(ErrorCode::InternalError, e.to_string()))
-            },
+                let tools = serde_json::json!({
+                    "tools": [
+                        {
+                            "name": "search_code",
+                            "description": "Semantic code search. Find symbols by natural language query.",
+                            "inputSchema": {
+                                "type": "object",
+                                "properties": {
+                                    "query": { "type": "string", "description": "Natural language search query" },
+                                    "limit": { "type": "integer", "description": "Max results (default: 10)" }
+                                },
+                                "required": ["query"]
+                            }
+                        },
+                        {
+                            "name": "get_callers",
+                            "description": "Find all functions that call the specified symbol.",
+                            "inputSchema": {
+                                "type": "object",
+                                "properties": {
+                                    "uri": { "type": "string", "description": "Symbol URI" },
+                                    "depth": { "type": "integer", "description": "Traversal depth (default: 1)" }
+                                },
+                                "required": ["uri"]
+                            }
+                        },
+                        {
+                            "name": "get_callees",
+                            "description": "Find all functions called by the specified symbol.",
+                            "inputSchema": {
+                                "type": "object",
+                                "properties": {
+                                    "uri": { "type": "string", "description": "Symbol URI" },
+                                    "depth": { "type": "integer", "description": "Traversal depth (default: 1)" }
+                                },
+                                "required": ["uri"]
+                            }
+                        },
+                        {
+                            "name": "get_impact",
+                            "description": "Analyze impact of changes to a symbol.",
+                            "inputSchema": {
+                                "type": "object",
+                                "properties": {
+                                    "uri": { "type": "string", "description": "Symbol URI" },
+                                    "depth": { "type": "integer", "description": "Traversal depth (default: 3)" }
+                                },
+                                "required": ["uri"]
+                            }
+                        }
+                    ]
+                });
+                JsonRpcResponse {
+                    jsonrpc: "2.0",
+                    id,
+                    result: Some(tools),
+                    error: None,
+                }
+            }
             "tools/call" => {
-                let req: CallToolRequest = params.and_then(|v| serde_json::from_value(v).ok())
-                    .ok_or(Error::protocol(ErrorCode::InvalidParams, "Missing params"))?;
-                
-                let result_content = if req.name == "search_code" {
-                    let args: SearchArgs = serde_json::from_value(req.arguments.unwrap_or(serde_json::json!({})))
-                        .map_err(|e| Error::protocol(ErrorCode::InvalidParams, e.to_string()))?;
-                    
-                    let engine = QueryEngine::new(&self.store);
-                    let results = engine.search_by_name(&args.query, args.limit.unwrap_or(10) as usize)
-                        .map_err(|e| Error::protocol(ErrorCode::InternalError, e.to_string()))?;
-                    
-                    let mut text_output = String::new();
-                    for res in results {
-                         text_output.push_str(&format!("- {} ({})\n  {}\n", res.symbol.name, res.symbol.kind, res.symbol.uri.to_uri_string()));
-                    }
-                    if text_output.is_empty() {
-                        text_output = "No results found.".to_string();
-                    }
-                    text_output
+                self.handle_tool_call(id, req.params).await
+            }
+            _ => {
+                JsonRpcResponse {
+                    jsonrpc: "2.0",
+                    id,
+                    result: None,
+                    error: Some(JsonRpcError {
+                        code: -32601,
+                        message: format!("Method not found: {}", req.method),
+                    }),
+                }
+            }
+        }
+    }
 
-                } else if req.name == "get_callers" {
-                    let args: GraphArgs = serde_json::from_value(req.arguments.unwrap_or(serde_json::json!({})))
-                        .map_err(|e| Error::protocol(ErrorCode::InvalidParams, e.to_string()))?;
-                    
-                    let engine = QueryEngine::new(&self.store);
-                    let uri = crate::uri::SymbolUri::parse(&args.uri)
-                        .map_err(|e| Error::protocol(ErrorCode::InvalidParams, e.to_string()))?;
-                    let callers = engine.find_callers(&uri, args.depth.unwrap_or(1) as usize)
-                         .map_err(|e| Error::protocol(ErrorCode::InternalError, e.to_string()))?;
-                    
-                    let mut text_output = String::new();
-                    for symbol in callers {
-                        text_output.push_str(&format!("- {} ({})\n  {}\n", symbol.name, symbol.kind, symbol.uri.to_uri_string()));
-                    }
-                    if text_output.is_empty() {
-                        text_output = "No callers found.".to_string();
-                    }
-                    text_output
-
-                } else if req.name == "get_callees" {
-                    let args: GraphArgs = serde_json::from_value(req.arguments.unwrap_or(serde_json::json!({})))
-                        .map_err(|e| Error::protocol(ErrorCode::InvalidParams, e.to_string()))?;
-                    
-                    let engine = QueryEngine::new(&self.store);
-                    let uri = crate::uri::SymbolUri::parse(&args.uri)
-                        .map_err(|e| Error::protocol(ErrorCode::InvalidParams, e.to_string()))?;
-                    let callees = engine.find_callees(&uri, args.depth.unwrap_or(1) as usize)
-                         .map_err(|e| Error::protocol(ErrorCode::InternalError, e.to_string()))?;
-                    
-                    let mut text_output = String::new();
-                    for symbol in callees {
-                        text_output.push_str(&format!("- {} ({})\n  {}\n", symbol.name, symbol.kind, symbol.uri.to_uri_string()));
-                    }
-                    if text_output.is_empty() {
-                        text_output = "No callees found.".to_string();
-                    }
-                    text_output
-
-                } else if req.name == "get_impact" {
-                    let args: GraphArgs = serde_json::from_value(req.arguments.unwrap_or(serde_json::json!({})))
-                        .map_err(|e| Error::protocol(ErrorCode::InvalidParams, e.to_string()))?;
-                    
-                    let engine = QueryEngine::new(&self.store);
-                    let uri = crate::uri::SymbolUri::parse(&args.uri)
-                        .map_err(|e| Error::protocol(ErrorCode::InvalidParams, e.to_string()))?;
-                    let impact = engine.impact_analysis(&uri, args.depth.unwrap_or(3) as usize)
-                         .map_err(|e| Error::protocol(ErrorCode::InternalError, e.to_string()))?;
-                    
-                    let mut text_output = String::new();
-                    for res in impact {
-                         let prefix = if res.is_direct() { "🔴 [DIRECT]" } else { "🟠 [INDIRECT]" };
-                         text_output.push_str(&format!("{} {} ({})\n   {}\n", prefix, res.symbol.name, res.symbol.kind, res.symbol.uri.to_uri_string()));
-                    }
-                    if text_output.is_empty() {
-                        text_output = "No impact found.".to_string();
-                    }
-                    text_output
-
-                } else {
-                    return Err(Error::protocol(ErrorCode::MethodNotFound, req.name));
-                };
-
-                // Create common response format
-                let result = ToolResult {
-                    content: Vec::new(),
-                    structured_content: Some(serde_json::to_value(vec![
-                        serde_json::json!({
-                            "type": "text",
-                            "text": result_content
-                        })
-                    ]).unwrap()),
-                };
-                
-                serde_json::to_value(result).map_err(|e| Error::protocol(ErrorCode::InternalError, e.to_string()))
+    async fn handle_tool_call(&self, id: Value, params: Option<Value>) -> JsonRpcResponse {
+        let params = match params {
+            Some(p) => p,
+            None => return JsonRpcResponse {
+                jsonrpc: "2.0",
+                id,
+                result: None,
+                error: Some(JsonRpcError {
+                    code: -32602,
+                    message: "Missing params".to_string(),
+                }),
             },
-            _ => Err(Error::protocol(ErrorCode::MethodNotFound, method.to_string()))
+        };
+
+        let tool_name = params.get("name").and_then(|v| v.as_str()).unwrap_or("");
+        let arguments = params.get("arguments").cloned().unwrap_or(serde_json::json!({}));
+
+        let result_text = match tool_name {
+            "search_code" => {
+                let args: SearchArgs = match serde_json::from_value(arguments) {
+                    Ok(a) => a,
+                    Err(e) => return self.error_response(id, -32602, format!("Invalid arguments: {}", e)),
+                };
+                
+                // Use semantic search via embeddings
+                match crate::query::EmbeddingEngine::new() {
+                    Ok(embedding_engine) => {
+                        match embedding_engine.embed_query(&args.query) {
+                            Ok(query_vector) => {
+                                let engine = QueryEngine::new(&self.store);
+                                match engine.search_by_vector(&query_vector, args.limit.unwrap_or(10) as usize) {
+                                    Ok(results) => {
+                                        let mut output = String::new();
+                                        for res in results {
+                                            output.push_str(&format!("- {} ({}) [score: {:.2}]\n  {}\n", 
+                                                res.symbol.name, res.symbol.kind, res.score, res.symbol.uri.to_uri_string()));
+                                            if let Some(sig) = &res.symbol.signature {
+                                                output.push_str(&format!("  Sig: {}\n", sig));
+                                            }
+                                        }
+                                        if output.is_empty() {
+                                            "No results found.".to_string()
+                                        } else {
+                                            output
+                                        }
+                                    }
+                                    Err(e) => format!("Search error: {}", e),
+                                }
+                            }
+                            Err(e) => format!("Embedding error: {}", e),
+                        }
+                    }
+                    Err(e) => format!("Failed to load embedding engine: {}", e),
+                }
+            }
+            "get_callers" => {
+                let args: GraphArgs = match serde_json::from_value(arguments) {
+                    Ok(a) => a,
+                    Err(e) => return self.error_response(id, -32602, format!("Invalid arguments: {}", e)),
+                };
+                
+                let engine = QueryEngine::new(&self.store);
+                match crate::uri::SymbolUri::parse(&args.uri) {
+                    Ok(uri) => {
+                        match engine.find_callers(&uri, args.depth.unwrap_or(1) as usize) {
+                            Ok(callers) => {
+                                let mut output = String::new();
+                                for sym in callers {
+                                    output.push_str(&format!("- {} ({})\n  {}\n", sym.name, sym.kind, sym.uri.to_uri_string()));
+                                }
+                                if output.is_empty() {
+                                    "No callers found.".to_string()
+                                } else {
+                                    output
+                                }
+                            }
+                            Err(e) => format!("Error: {}", e),
+                        }
+                    }
+                    Err(e) => format!("Invalid URI: {}", e),
+                }
+            }
+            "get_callees" => {
+                let args: GraphArgs = match serde_json::from_value(arguments) {
+                    Ok(a) => a,
+                    Err(e) => return self.error_response(id, -32602, format!("Invalid arguments: {}", e)),
+                };
+                
+                let engine = QueryEngine::new(&self.store);
+                match crate::uri::SymbolUri::parse(&args.uri) {
+                    Ok(uri) => {
+                        match engine.find_callees(&uri, args.depth.unwrap_or(1) as usize) {
+                            Ok(callees) => {
+                                let mut output = String::new();
+                                for sym in callees {
+                                    output.push_str(&format!("- {} ({})\n  {}\n", sym.name, sym.kind, sym.uri.to_uri_string()));
+                                }
+                                if output.is_empty() {
+                                    "No callees found.".to_string()
+                                } else {
+                                    output
+                                }
+                            }
+                            Err(e) => format!("Error: {}", e),
+                        }
+                    }
+                    Err(e) => format!("Invalid URI: {}", e),
+                }
+            }
+            "get_impact" => {
+                let args: GraphArgs = match serde_json::from_value(arguments) {
+                    Ok(a) => a,
+                    Err(e) => return self.error_response(id, -32602, format!("Invalid arguments: {}", e)),
+                };
+                
+                let engine = QueryEngine::new(&self.store);
+                match crate::uri::SymbolUri::parse(&args.uri) {
+                    Ok(uri) => {
+                        match engine.impact_analysis(&uri, args.depth.unwrap_or(3) as usize) {
+                            Ok(impact) => {
+                                let mut output = String::new();
+                                for res in impact {
+                                    let prefix = if res.is_direct() { "🔴 [DIRECT]" } else { "🟠 [INDIRECT]" };
+                                    output.push_str(&format!("{} {} ({})\n  {}\n", prefix, res.symbol.name, res.symbol.kind, res.symbol.uri.to_uri_string()));
+                                }
+                                if output.is_empty() {
+                                    "No impact found.".to_string()
+                                } else {
+                                    output
+                                }
+                            }
+                            Err(e) => format!("Error: {}", e),
+                        }
+                    }
+                    Err(e) => format!("Invalid URI: {}", e),
+                }
+            }
+            _ => format!("Unknown tool: {}", tool_name),
+        };
+
+        JsonRpcResponse {
+            jsonrpc: "2.0",
+            id,
+            result: Some(serde_json::json!({
+                "content": [{
+                    "type": "text",
+                    "text": result_text
+                }]
+            })),
+            error: None,
+        }
+    }
+
+    fn error_response(&self, id: Value, code: i32, message: String) -> JsonRpcResponse {
+        JsonRpcResponse {
+            jsonrpc: "2.0",
+            id,
+            result: None,
+            error: Some(JsonRpcError { code, message }),
         }
     }
 }
