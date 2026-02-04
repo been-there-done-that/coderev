@@ -38,7 +38,7 @@ impl Watcher {
             let repo_name = self.path.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_else(|| "repo".to_string());
             ui::header(&format!("Watching {}", repo_name));
             println!("📄 Path: {}", self.path.display().style(ui::theme().info.clone()));
-            println!("👀 Standing by for changes...");
+            println!("👀 Standing by for changess...");
             println!();
         }
         
@@ -60,11 +60,24 @@ impl Watcher {
         Ok(())
     }
 
+    fn is_hidden(path: &std::path::Path) -> bool {
+        path.components().any(|c| {
+            if let std::path::Component::Normal(p) = c {
+                p.to_string_lossy().starts_with('.')
+            } else {
+                false
+            }
+        })
+    }
+
     fn handle_event(&self, event: notify::Event) {
         use notify::EventKind;
         match event.kind {
             EventKind::Create(_) | EventKind::Modify(_) => {
                 for path in event.paths {
+                    if Self::is_hidden(&path) {
+                        continue;
+                    }
                     if path.is_file() {
                         self.process_file(&path);
                     }
@@ -72,6 +85,9 @@ impl Watcher {
             },
             EventKind::Remove(_) => {
                 for path in event.paths {
+                    if Self::is_hidden(&path) {
+                        continue;
+                    }
                     self.remove_file(&path);
                 }
             },

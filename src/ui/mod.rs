@@ -13,5 +13,5 @@ pub use output::{
 pub use crate::output::is_quiet;
 pub use progress::{ProgressManager, Spinner};
 pub use progress_message::{ProgressMessage, ProgressPhase};
-pub use table::TableBuilder;
+pub use table::SimpleTable;
 pub use theme::{theme, Theme};

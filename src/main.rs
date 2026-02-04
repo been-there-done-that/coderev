@@ -1289,25 +1289,25 @@ async fn run(cli: Cli, output_mode: OutputMode) -> anyhow::Result<()> {
                 println!();
                 section("Indexing Report");
                 
-                let mut table = coderev::ui::table::TableBuilder::new();
+                let mut table = coderev::ui::table::SimpleTable::new();
                 
                 table.add_row("Files (Parsed/Skipped)", &format!("{}", total_files));
-                table.add_row("  ✨ Added", &format!("{}", stats.added));
-                table.add_row("  📝 Modified", &format!("{}", stats.modified));
-                table.add_row("  🗑️ Deleted", &format!("{}", stats.deleted));
+                table.add_row("  + Added", &format!("{}", stats.added));
+                table.add_row("  ~ Modified", &format!("{}", stats.modified));
+                table.add_row("  - Deleted", &format!("{}", stats.deleted));
                 
                 if let Some(ms) = parsing_ms {
-                    table.add_row("⏱️ Parsing", &format!("{:?}", std::time::Duration::from_millis(ms as u64)));
+                    table.add_row("  > Time", &format!("{:?}", std::time::Duration::from_millis(ms as u64)));
                 }
 
                 if linker_stats.is_some() {
 
                     if let Some(ref s) = linker_stats {
                         table.add_row("Symbols (Linked)", &format!("{}", s.total));
-                        table.add_row("  ✅ Resolved", &format!("{}", s.resolved));
-                        table.add_row("  🌍 External", &format!("{}", s.external));
+                        table.add_row("  + Resolved", &format!("{}", s.resolved));
+                        table.add_row("  ^ External", &format!("{}", s.external));
                         if let Some(ms) = linking_ms {
-                            table.add_row("⏱️ Linking", &format!("{:?}", std::time::Duration::from_millis(ms as u64)));
+                            table.add_row("  > Time", &format!("{:?}", std::time::Duration::from_millis(ms as u64)));
                         }
                     }
                 }
@@ -1316,32 +1316,32 @@ async fn run(cli: Cli, output_mode: OutputMode) -> anyhow::Result<()> {
 
                     table.add_row("Embeddings Generated", &format!("{}", embedded_symbols));
                     if let Some(ms) = embedding_ms {
-                        table.add_row("⏱️ Embedding", &format!("{:?}", std::time::Duration::from_millis(ms as u64)));
+                        table.add_row("  > Time", &format!("{:?}", std::time::Duration::from_millis(ms as u64)));
                     }
                 }
 
                 if let Some(ref s) = semantic_stats {
 
                     table.add_row("Semantic Resolution", &format!("{}", s.total));
-                    table.add_row("  🧠 Resolved", &format!("{}", s.resolved));
+                    table.add_row("  + Resolved", &format!("{}", s.resolved));
                     if let Some(ms) = semantic_ms {
-                        table.add_row("⏱️ Semantic", &format!("{:?}", std::time::Duration::from_millis(ms as u64)));
+                        table.add_row("  > Time", &format!("{:?}", std::time::Duration::from_millis(ms as u64)));
                     }
                 }
 
 
                 let final_stats = store.stats().unwrap_or_default();
                 table.add_row("Database Total", "");
-                table.add_row("  🔖 Symbols", &format!("{}", final_stats.symbols));
-                table.add_row("  🔗 Edges", &format!("{}", final_stats.edges));
+                table.add_row("  # Symbols", &format!("{}", final_stats.symbols));
+                table.add_row("  = Edges", &format!("{}", final_stats.edges));
                 if let Ok(meta) = std::fs::metadata(&database) {
-                    table.add_row("  📦 Size", &coderev::ui::human_bytes(meta.len()));
+                    table.add_row("  @ Size", &coderev::ui::human_bytes(meta.len()));
                 }
                 
 
-                table.add_row("🚀 Total Duration", &format!("{:.2}s", total_start.elapsed().as_secs_f64()));
+                table.add_row("Total Duration", &format!("{:.2}s", total_start.elapsed().as_secs_f64()));
                 
-                println!("{}", table.build());
+                table.print();
             }
 
             if output_mode.is_machine() {

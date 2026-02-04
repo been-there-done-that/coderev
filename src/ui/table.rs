@@ -1,24 +1,18 @@
-use tabled::{settings::{Style, themes::Theme, style::HorizontalLine}, Table, Tabled};
+use crate::ui::theme;
+use owo_colors::OwoColorize;
 
-#[derive(Tabled)]
 pub struct TableRow {
-    #[tabled(rename = "Metric")]
     pub metric: String,
-    #[tabled(rename = "Value")]
     pub value: String,
 }
 
-pub struct TableBuilder {
+pub struct SimpleTable {
     rows: Vec<TableRow>,
-    separators: Vec<usize>,
 }
 
-impl TableBuilder {
+impl SimpleTable {
     pub fn new() -> Self {
-        Self { 
-            rows: Vec::new(),
-            separators: Vec::new(),
-        }
+        Self { rows: Vec::new() }
     }
 
     pub fn add_row(&mut self, label: &str, value: &str) {
@@ -28,41 +22,65 @@ impl TableBuilder {
         });
     }
 
-    pub fn add_separator(&mut self) {
-        if !self.rows.is_empty() {
-            self.separators.push(self.rows.len());
-        }
-    }
-
-    pub fn build(&self) -> String {
+    pub fn print(&self) {
         if self.rows.is_empty() {
-            return String::new();
+            return;
         }
 
-        let mut table = Table::new(&self.rows);
-        let mut theme = Theme::from(Style::modern());
-        theme.remove_horizontal_lines();
+        // 1. Calculate column widths
+        let mut m_w = console::measure_text_width("Metric");
+        let mut v_w = console::measure_text_width("Value");
+
+        for row in &self.rows {
+            m_w = m_w.max(console::measure_text_width(&row.metric));
+            v_w = v_w.max(console::measure_text_width(&row.value));
+        }
+
+        // Add padding (1 space on each side)
+        m_w += 2;
+        v_w += 2;
+
+        let inner_width = m_w + v_w + 2; // Col1 + Gap (2 spaces) + Col2
+        let dim = theme().dim.clone();
+        let h_line = "─".repeat(inner_width);
+
+        // 2. Borders
+        let top = format!("┌{}┐", h_line);
+        let mid = format!("├{}┤", h_line);
+        let bot = format!("└{}┘", h_line);
+
+        // 3. Print
+        println!("  {}", top.style(dim.clone()));
         
-        // Add header separator (between header and first data row)
-        // Row 0 is header.
-        theme.insert_horizontal_line(1, HorizontalLine::inherit(Style::modern()));
+        // Header
+        let h_m = pad_str("Metric", m_w);
+        let h_v = pad_str("Value", v_w);
+        println!(
+            "  │{}  {}│", 
+            h_m.style(theme().header.clone()), 
+            h_v.style(theme().header.clone())
+        );
 
-        for &idx in &self.separators {
-            // idx is number of data rows added.
-            // If we have 1 header + N data rows, indices are 0..=N.
-            // A separator below data row idx (which is row idx in the table)
-            // will be at index idx+1.
-            theme.insert_horizontal_line(idx + 1, HorizontalLine::inherit(Style::modern()));
+        println!("  {}", mid.style(dim.clone()));
+
+        for row in &self.rows {
+            println!(
+                "  │{}  {}│",
+                pad_str(&row.metric, m_w),
+                pad_str(&row.value, v_w)
+            );
         }
 
-        table.with(theme).to_string()
+        println!("  {}", bot.style(dim.clone()));
     }
 }
 
-pub fn stats_table(stats: &[(&str, &str)]) -> String {
-    let mut builder = TableBuilder::new();
-    for (label, value) in stats {
-        builder.add_row(label, value);
+fn pad_str(s: &str, width: usize) -> String {
+    let s_width = console::measure_text_width(s);
+    if s_width >= width {
+        return s.to_string();
     }
-    builder.build()
+    let padding = width - s_width;
+    // Indent by 1 space, then pad the right
+    format!(" {}{}", s, " ".repeat(padding - 1))
 }
