@@ -88,6 +88,12 @@ pub fn banner(title: &str, subtitle: &str) {
     
     let subtitle_line = center_text(subtitle, width - 4);
     println!("  {}{}{}", "│".style(theme().dim.clone()), subtitle_line, "│".style(theme().dim.clone()));
+
+    println!("  {}{}{}", "│".style(theme().dim.clone()), " ".repeat(width - 2), "│".style(theme().dim.clone()));
+    
+    let langs = "Supported: Python, Rust, JavaScript, TypeScript, Go";
+    let lang_line = center_text(langs, width - 4);
+    println!("  {}{}{}", "│".style(theme().dim.clone()), lang_line.style(theme().dim.clone()), "│".style(theme().dim.clone()));
     
     println!("  {}", format!("└{}┘", line).style(theme().dim.clone()));
     println!();

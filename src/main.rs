@@ -818,7 +818,7 @@ async fn run(cli: Cli, output_mode: OutputMode) -> anyhow::Result<()> {
                 repo: Some(repo_name),
                 path: Some(target_path.display().to_string()),
                 include: None,
-                exclude: None,
+                exclude: Some(CoderevConfig::default_excludes()),
             };
 
             let cfg_path = config_path
