@@ -13,7 +13,7 @@ use coderev::storage::SqliteStore;
 use coderev::{SymbolKind, IndexMessage, FileStatus};
 use coderev::config::{self, CoderevConfig};
 use tracing_subscriber::{fmt, prelude::*, EnvFilter};
-use std::io::Write;
+
 
 #[derive(Parser)]
 #[command(name = "coderev")]
@@ -931,7 +931,7 @@ async fn run(cli: Cli, output_mode: OutputMode) -> anyhow::Result<()> {
 
             if output_mode.is_human() {
                 banner(
-                    &format!("{}", "CODEGREP".style(coderev::ui::theme().info.clone()).bold()),
+                    &format!("{}", "CodeGrep".style(coderev::ui::theme().info.clone()).bold()),
                     &format!("Indexing {} into {}", repo_name.style(coderev::ui::theme().info.clone()), database.file_name().unwrap_or_default().to_string_lossy().style(coderev::ui::theme().dim.clone()))
                 );
                 if force {
@@ -1216,8 +1216,12 @@ async fn run(cli: Cli, output_mode: OutputMode) -> anyhow::Result<()> {
                     for chunk in symbols_to_embed.chunks(batch_size) {
                         let embeddings = engine.embed_symbols(chunk)?;
                         store.begin_transaction()?;
-                        for (i, vector) in embeddings.into_iter().enumerate() {
-                            store.insert_embedding(&chunk[i].uri, &vector)?;
+                        
+                        let mut chunk_counts = std::collections::HashMap::new();
+                        for (symbol_idx, vector) in embeddings {
+                            let count = chunk_counts.entry(symbol_idx).or_insert(0);
+                            store.insert_embedding(&chunk[symbol_idx].uri, *count, &vector)?;
+                            *count += 1;
                         }
                         store.commit()?;
                         processed += chunk.len();
@@ -1380,7 +1384,10 @@ async fn run(cli: Cli, output_mode: OutputMode) -> anyhow::Result<()> {
                 // But ensure_embeddings prints progress, so the user knows what's happening.
                 let _ = ensure_embeddings(&store)?;
                 if output_mode.is_human() {
-                    info("Searching", &format!("'{}'", query));
+                    banner(
+                        &format!("{}", "CodeGrep".style(coderev::ui::theme().info.clone()).bold()),
+                        &format!("Searching: {}", query.style(coderev::ui::theme().info.clone()))
+                    );
                 }
                 let engine = QueryEngine::new(&store);
                 match coderev::query::EmbeddingEngine::new() {
@@ -2081,30 +2088,34 @@ fn ensure_embeddings(store: &SqliteStore) -> anyhow::Result<usize> {
         let engine = coderev::query::EmbeddingEngine::new()?;
         let batch_size = 32;
         let mut processed = 0;
-        if !coderev::output::is_quiet() {
-            println!("   Generating {} symbol embeddings...", total);
-            print!("   Progress: 0 / {}", total);
-            std::io::stdout().flush().ok();
-        }
+        
+        let spinner = if !coderev::output::is_quiet() {
+            let s = coderev::ui::Spinner::new("Optimizing search index (generating missing embeddings)...");
+            Some(s)
+        } else {
+            None
+        };
         
         for chunk in missing.chunks(batch_size) {
             let embeddings = engine.embed_symbols(chunk)?;
             
             store.begin_transaction()?;
-            for (i, vector) in embeddings.into_iter().enumerate() {
-                store.insert_embedding(&chunk[i].uri, &vector)?;
+            let mut chunk_counts = std::collections::HashMap::new();
+            for (symbol_idx, vector) in embeddings {
+                let count = chunk_counts.entry(symbol_idx).or_insert(0);
+                store.insert_embedding(&chunk[symbol_idx].uri, *count, &vector)?;
+                *count += 1;
             }
             store.commit()?;
             
             processed += chunk.len();
-            if !coderev::output::is_quiet() {
-                print!("\r   Progress: {} / {}", processed, total);
-                std::io::stdout().flush().ok();
+            if let Some(s) = &spinner {
+                s.set_message(&format!("Optimizing search index... {}/{}", processed, total));
             }
         }
-        if !coderev::output::is_quiet() {
-            println!();
-            println!("✅ Embedding complete.");
+        
+        if let Some(s) = &spinner {
+            s.finish_with_message("Optimizing search index... Done");
         }
     }
     Ok(total)

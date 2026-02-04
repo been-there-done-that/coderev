@@ -20,32 +20,74 @@ impl EmbeddingEngine {
         Ok(Self { model })
     }
 
-    /// Generate embeddings for a batch of symbols
-    pub fn embed_symbols(&self, symbols: &[Symbol]) -> Result<Vec<Vec<f32>>> {
+    /// Generate embeddings for a list of symbols.
+    /// Returns a list of (symbol_index, vector) tuples.
+    /// A single symbol might generate multiple vectors if it is large (Semantic Body Chunking).
+    pub fn embed_symbols(&self, symbols: &[Symbol]) -> Result<Vec<(usize, Vec<f32>)>> {
         if symbols.is_empty() {
             return Ok(vec![]);
         }
 
-        // Prepare text inputs for embedding
-        // We use a combination of name, signature, and start of content
-        let inputs: Vec<String> = symbols.iter().map(|s| {
+        let mut inputs: Vec<String> = Vec::new();
+        let mut mappings: Vec<usize> = Vec::new();
+
+        for (i, s) in symbols.iter().enumerate() {
+            // 1. Head Embedding (Name + Sig + Preview)
+            // This captures the "intent" and high-level definition
             let mut text = format!("Symbol: {}\nKind: {:?}\n", s.name, s.kind);
             if let Some(sig) = &s.signature {
                 text.push_str(&format!("Signature: {}\n", sig));
             }
             if !s.content.is_empty() {
-                // Use first 500 characters of content for context
-                let content_preview = s.content.chars().take(500).collect::<String>();
+                // Use first 1500 characters
+                let content_preview = s.content.chars().take(1500).collect::<String>();
                 text.push_str(&format!("Context: {}\n", content_preview));
             }
-            text
-        }).collect();
+            inputs.push(text);
+            mappings.push(i);
+
+            // 2. Body Embeddings (Deep Content)
+            // If content is larger than 1500 chars, chunk the rest
+            if s.content.len() > 1500 {
+                let full_content = &s.content;
+                let chunk_size = 1000;
+                let overlap = 100;
+                
+                // Start after the initial preview to avoid redundancy? 
+                // Actually, redundancy is fine, but let's start at 1000 to overlap slightly with the head.
+                let mut start = 1000; 
+
+                while start < full_content.len() {
+                    let end = std::cmp::min(start + chunk_size, full_content.len());
+                    // Ensure we don't slice mid-char
+                    let chunk_str = if let Some(s_idx) = full_content.char_indices().map(|(i, _)| i).nth(start) {
+                         if let Some(e_idx) = full_content.char_indices().map(|(i, _)| i).nth(end) {
+                             &full_content[s_idx..e_idx]
+                         } else {
+                             &full_content[s_idx..]
+                         }
+                    } else {
+                         ""
+                    };
+
+                    if !chunk_str.trim().is_empty() {
+                         let body_text = format!("Context from {}: {}\n", s.name, chunk_str);
+                         inputs.push(body_text);
+                         mappings.push(i);
+                    }
+                    
+                    start += chunk_size - overlap;
+                }
+            }
+        }
 
         // Generate embeddings in batch
         let embeddings = self.model.embed(inputs, None)
             .map_err(|e| crate::Error::Adapter(format!("Embedding generation failed: {}", e)))?;
         
-        Ok(embeddings)
+        // Combine mapping with vectors
+        let result = mappings.into_iter().zip(embeddings.into_iter()).collect();
+        Ok(result)
     }
 
     /// Generate a single embedding for a query

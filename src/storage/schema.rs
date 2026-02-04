@@ -32,8 +32,10 @@ CREATE TABLE IF NOT EXISTS edges (
 /// SQL to create the embeddings table
 pub const CREATE_EMBEDDINGS_TABLE: &str = r#"
 CREATE TABLE IF NOT EXISTS embeddings (
-    uri TEXT PRIMARY KEY,
-    vector BLOB NOT NULL
+    uri TEXT NOT NULL,
+    id INTEGER NOT NULL DEFAULT 0,
+    vector BLOB NOT NULL,
+    PRIMARY KEY (uri, id)
 )
 "#;
 

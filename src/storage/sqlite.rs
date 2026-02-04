@@ -402,43 +402,49 @@ impl SqliteStore {
     // ========== Embedding Operations ==========
 
     /// Insert or replace an embedding
-    pub fn insert_embedding(&self, uri: &SymbolUri, vector: &[f32]) -> Result<()> {
+    pub fn insert_embedding(&self, uri: &SymbolUri, id: usize, vector: &[f32]) -> Result<()> {
         let uri_str = uri.to_uri_string();
         let blob: Vec<u8> = vector.iter().flat_map(|f| f.to_le_bytes()).collect();
         
         self.lock_conn()?.execute(
-            "INSERT OR REPLACE INTO embeddings (uri, vector) VALUES (?1, ?2)",
-            params![uri_str, blob],
+            "INSERT OR REPLACE INTO embeddings (uri, id, vector) VALUES (?1, ?2, ?3)",
+            params![uri_str, id, blob],
         )?;
         Ok(())
     }
 
-    pub fn insert_embeddings_batch(&self, symbols: &[crate::symbol::Symbol], embeddings: &[Vec<f32>]) -> Result<()> {
-        if symbols.len() != embeddings.len() {
-             return Err(crate::Error::Adapter("Symbols and embeddings count mismatch".into()));
-        }
-        
+    pub fn insert_embeddings_batch(&self, symbols: &[crate::symbol::Symbol], embeddings: &[(usize, Vec<f32>)]) -> Result<()> {
         let mut conn = self.lock_conn()?;
         let tx = conn.transaction()?;
         {
-            let mut stmt = tx.prepare_cached("INSERT OR REPLACE INTO embeddings (uri, vector) VALUES (?1, ?2)")?;
-            for (symbol, vector) in symbols.iter().zip(embeddings.iter()) {
+            let mut stmt = tx.prepare_cached("INSERT OR REPLACE INTO embeddings (uri, id, vector) VALUES (?1, ?2, ?3)")?;
+            let mut chunk_counts = std::collections::HashMap::new();
+            
+            for (symbol_idx, vector) in embeddings {
+                if *symbol_idx >= symbols.len() {
+                    continue; // Should not happen if logic is correct
+                }
+                let symbol = &symbols[*symbol_idx];
+                let count = chunk_counts.entry(*symbol_idx).or_insert(0);
+                
                 let uri_str = symbol.uri.to_uri_string();
                 let blob: Vec<u8> = vector.iter().flat_map(|f| f.to_le_bytes()).collect();
-                stmt.execute(params![uri_str, blob])?;
+                stmt.execute(params![uri_str, *count, blob])?;
+                
+                *count += 1;
             }
         }
         tx.commit()?;
         Ok(())
     }
 
-    /// Get an embedding by URI
+    /// Get an embedding by URI (returns the primary embedding, id=0)
     pub fn get_embedding(&self, uri: &SymbolUri) -> Result<Option<Vec<f32>>> {
         let uri_str = uri.to_uri_string();
         
         let result: Option<Vec<u8>> = self.lock_conn()?
             .query_row(
-                "SELECT vector FROM embeddings WHERE uri = ?1",
+                "SELECT vector FROM embeddings WHERE uri = ?1 AND id = 0",
                 [uri_str],
                 |row| row.get(0),
             )
@@ -485,7 +491,7 @@ impl SqliteStore {
     /// Get all embeddings for caching
     pub fn get_all_embeddings(&self) -> Result<Vec<(String, Vec<f32>)>> {
         let conn = self.lock_conn()?;
-        let mut stmt = conn.prepare("SELECT uri, vector FROM embeddings")?;
+        let mut stmt = conn.prepare("SELECT uri, vector FROM embeddings ORDER BY uri, id")?;
         
         let it = stmt.query_map([], |row| {
             let uri: String = row.get(0)?;
@@ -538,11 +544,22 @@ impl SqliteStore {
             results
         };
         
-        // Take top N and fetch symbols (outside the lock)
+        // Take top N distinct URIs and fetch symbols (outside the lock)
         let mut final_results = Vec::new();
-        for (uri_str, score) in scored_results.into_iter().take(limit) {
+        let mut seen_uris = std::collections::HashSet::new();
+        
+        for (uri_str, score) in scored_results {
+            if final_results.len() >= limit {
+                break;
+            }
+            
+            if seen_uris.contains(&uri_str) {
+                continue;
+            }
+            
             let uri = SymbolUri::parse(&uri_str)?;
             if let Some(symbol) = self.get_symbol(&uri)? {
+                seen_uris.insert(uri_str);
                 final_results.push((symbol, score));
             }
         }
@@ -1107,7 +1124,7 @@ mod tests {
         store.insert_symbol(&symbol).unwrap();
         
         let vector = vec![0.1, 0.2, 0.3, 0.4];
-        store.insert_embedding(&uri, &vector).unwrap();
+        store.insert_embedding(&uri, 0, &vector).unwrap();
         
         let retrieved = store.get_embedding(&uri).unwrap().unwrap();
         assert_eq!(retrieved.len(), 4);

@@ -491,7 +491,7 @@ impl<'a> SemanticResolver<'a> {
                 if let Some(candidate_symbol) = self.index.get_symbol(candidate_uri) {
                     let embeddings = engine.embed_symbols(&[candidate_symbol.clone()])?;
                     if !embeddings.is_empty() {
-                        embeddings.into_iter().next().unwrap()
+                        embeddings.into_iter().next().unwrap().1
                     } else {
                         continue;
                     }

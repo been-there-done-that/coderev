@@ -13,11 +13,12 @@ use crate::Result;
 use crate::symbol::{Symbol, SymbolKind};
 use super::framework::AdapterResult;
 
-/// Default chunk size in characters (roughly ~500 tokens)
-const DEFAULT_CHUNK_SIZE: usize = 2000;
+/// Default chunk size in characters (roughly ~500 tokens? No, 256 tokens is ~1000 chars)
+/// We use 1000 to match the embedding model's effective window.
+const DEFAULT_CHUNK_SIZE: usize = 1000;
 
 /// Overlap between chunks to preserve context
-const DEFAULT_OVERLAP: usize = 200;
+const DEFAULT_OVERLAP: usize = 100;
 
 /// Minimum chunk size to avoid tiny fragments
 const MIN_CHUNK_SIZE: usize = 100;
