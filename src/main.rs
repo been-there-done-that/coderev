@@ -3,9 +3,12 @@
 use clap::{Parser, Subcommand};
 use serde::Serialize;
 use std::path::PathBuf;
-use coderev::storage::SqliteStore;
+use coderev::ui::{Icons, header, success, info, section, phase, timing, summary_row};
+use coderev::ui::{file_modified, file_new, file_deleted, ProgressManager};
+use coderev::ui::progress_message::{ProgressMessage, ProgressPhase};
 use coderev::adapter;
 use coderev::query::QueryEngine;
+use coderev::storage::SqliteStore;
 use coderev::{SymbolKind, IndexMessage, FileStatus};
 use coderev::config::{self, CoderevConfig};
 use tracing_subscriber::{fmt, prelude::*, EnvFilter};
@@ -810,7 +813,7 @@ async fn run(cli: Cli, output_mode: OutputMode) -> anyhow::Result<()> {
             config::write_config(&cfg_path, &cfg, force)?;
 
             if output_mode.is_human() {
-                println!("✅ Wrote config to {}", cfg_path.display());
+                success(&format!("Wrote config to {}", cfg_path.display()));
             } else if matches!(output_mode, OutputMode::Json) {
                 let data = serde_json::json!({
                     "config_path": cfg_path.display().to_string(),
@@ -852,7 +855,7 @@ async fn run(cli: Cli, output_mode: OutputMode) -> anyhow::Result<()> {
             std::fs::write(&out_path, serde_json::to_string_pretty(&payload)?)?;
 
             if output_mode.is_human() {
-                println!("✅ Wrote MCP config to {}", out_path.display());
+                success(&format!("Wrote MCP config to {}", out_path.display()));
             } else if matches!(output_mode, OutputMode::Json) {
                 let data = serde_json::json!({
                     "path": out_path.display().to_string(),
@@ -890,14 +893,38 @@ async fn run(cli: Cli, output_mode: OutputMode) -> anyhow::Result<()> {
             let mut stats = IndexingStats::default();
 
             if output_mode.is_human() {
-                println!("🚀 Indexing repository: {}", repo_name);
-                println!("📂 Path: {:?}", path);
-                println!("🗄️  Database: {:?}", database);
+                header(&format!("Indexing {}", repo_name));
+                coderev::ui::status(Icons::FILE, "Path", &path.display().to_string());
+                coderev::ui::status(Icons::DATABASE, "Database", &database.display().to_string());
             }
-            
+
+            let total_files = ignore::WalkBuilder::new(&path)
+                .standard_filters(true)
+                .add_custom_ignore_filename(".cursorignore")
+                .build()
+                .filter_map(|e| e.ok())
+                .filter(|e| e.file_type().map(|ft| ft.is_file()).unwrap_or(false))
+                .filter(|e| {
+                    let ext = e.path().extension().and_then(|s| s.to_str()).unwrap_or("");
+                    !["png", "jpg", "jpeg", "gif", "ico", "exe", "dll", "so", "o", "a", "lib", "bin", "pdf", "zip", "tar", "gz", "wasm", "node", "db", "sqlite", "lock", "pyc", "svg"].contains(&ext)
+                })
+                .count();
+
+            let (_progress_manager, progress_tx) = if output_mode.is_human() {
+                ProgressManager::new(total_files)
+            } else {
+                let (manager, tx) = ProgressManager::new(0);
+                let (_tx_discard, _rx_discard) = crossbeam::channel::unbounded::<ProgressMessage>();
+                (manager, tx)
+            };
+
+            if output_mode.is_human() {
+                phase("Parsing Files");
+            }
+
             // Channel for worker-to-coordinator communication
             let (tx, rx) = std::sync::mpsc::channel::<IndexMessage>();
-            
+
             let start_indexing = std::time::Instant::now();
             let mut linking_ms: Option<u128> = None;
             let mut embedding_ms: Option<u128> = None;
@@ -905,7 +932,7 @@ async fn run(cli: Cli, output_mode: OutputMode) -> anyhow::Result<()> {
             let mut linker_stats: Option<coderev::linker::GlobalLinkerStats> = None;
             let mut semantic_stats: Option<coderev::linker::SemanticLinkerStats> = None;
             let mut embedded_symbols: usize = 0;
-            
+
             // Configure file walker
             let walker = ignore::WalkBuilder::new(&path)
                 .standard_filters(true)
@@ -914,37 +941,38 @@ async fn run(cli: Cli, output_mode: OutputMode) -> anyhow::Result<()> {
 
             let repo_name_clone = repo_name.clone();
             let path_clone = path.clone();
+            let progress_tx_clone = progress_tx.clone();
 
             // Spawn workers
             std::thread::scope(|scope| {
                 // Coordinator "thread" (runs in current scope)
                 let coordinator = scope.spawn(|| {
                     let mut seen_paths = std::collections::HashSet::new();
-                    
+
                     for msg in rx {
                         match msg {
-                            IndexMessage::Processed { 
-                                relative_path, 
-                                hash, 
-                                result, 
-                                status 
+                            IndexMessage::Processed {
+                                relative_path,
+                                hash,
+                                result,
+                                status
                             } => {
                                 seen_paths.insert(relative_path.clone());
-                                
+
                                 match status {
                                     FileStatus::Unchanged => {
                                         stats.unchanged += 1;
                                     }
                                     FileStatus::Modified => {
                                         if output_mode.is_human() {
-                                            println!("📝 Modified: {}", relative_path);
+                                            file_modified(&relative_path);
                                         }
                                         store.delete_file_data(&relative_path).ok();
                                         stats.modified += 1;
                                     }
                                     FileStatus::New => {
                                         if output_mode.is_human() {
-                                            println!("✨ New: {}", relative_path);
+                                            file_new(&relative_path);
                                         }
                                         stats.added += 1;
                                     }
@@ -986,7 +1014,7 @@ async fn run(cli: Cli, output_mode: OutputMode) -> anyhow::Result<()> {
                                     }
                                     stats.symbols += res.symbols.len();
                                 }
-                                
+
                                 store.update_file_hash(&relative_path, &hash).ok();
                             }
                             IndexMessage::Error(path, err) => {
@@ -1001,11 +1029,12 @@ async fn run(cli: Cli, output_mode: OutputMode) -> anyhow::Result<()> {
                 // Worker threads
                 walker.run(|| {
                     let tx = tx.clone();
+                    let progress_tx = progress_tx_clone.clone();
                     let repo_name = repo_name_clone.clone();
                     let root_path = path_clone.clone();
                     let registry = adapter::default_registry();
                     let chunker = adapter::DocumentChunker::new();
-                    let store = SqliteStore::open(&database).expect("Failed to open DB in worker"); // Read-only access for hash check
+                    let store = SqliteStore::open(&database).expect("Failed to open DB in worker");
 
                     Box::new(move |result| {
                         let entry = match result {
@@ -1019,7 +1048,7 @@ async fn run(cli: Cli, output_mode: OutputMode) -> anyhow::Result<()> {
 
                         let file_path = entry.path();
                         let ext = file_path.extension().and_then(|s| s.to_str()).unwrap_or("").to_lowercase();
-                        
+
                         let skip_exts = ["png", "jpg", "jpeg", "gif", "ico", "exe", "dll", "so", "o", "a", "lib", "bin", "pdf", "zip", "tar", "gz", "wasm", "node", "db", "sqlite", "lock", "pyc", "svg"];
                         if skip_exts.contains(&ext.as_str()) {
                             return ignore::WalkState::Continue;
@@ -1048,6 +1077,11 @@ async fn run(cli: Cli, output_mode: OutputMode) -> anyhow::Result<()> {
                                 result: None,
                                 status,
                             }).ok();
+                            progress_tx.send(ProgressMessage::Progress {
+                                phase: ProgressPhase::Parsing,
+                                current: 0,
+                                file: None,
+                            }).ok();
                             return ignore::WalkState::Continue;
                         }
 
@@ -1059,10 +1093,16 @@ async fn run(cli: Cli, output_mode: OutputMode) -> anyhow::Result<()> {
                         };
 
                         tx.send(IndexMessage::Processed {
-                            relative_path: relative_path_str,
+                            relative_path: relative_path_str.clone(),
                             hash,
                             result,
                             status,
+                        }).ok();
+
+                        progress_tx.send(ProgressMessage::Progress {
+                            phase: ProgressPhase::Parsing,
+                            current: 0,
+                            file: Some(relative_path_str),
                         }).ok();
 
                         ignore::WalkState::Continue
@@ -1071,6 +1111,7 @@ async fn run(cli: Cli, output_mode: OutputMode) -> anyhow::Result<()> {
 
                 // Close channel by dropping remaining tx
                 drop(tx);
+                drop(progress_tx_clone);
 
                 // Wait for coordinator and handle deletions
                 let seen_paths = coordinator.join().unwrap();
@@ -1078,7 +1119,7 @@ async fn run(cli: Cli, output_mode: OutputMode) -> anyhow::Result<()> {
                 for db_path in db_paths {
                     if !seen_paths.contains(&db_path) {
                         if output_mode.is_human() {
-                            println!("🗑️  Deleted: {}", db_path);
+                            file_deleted(&db_path);
                         }
                         store.delete_file_data(&db_path).ok();
                         stats.deleted += 1;
@@ -1086,37 +1127,28 @@ async fn run(cli: Cli, output_mode: OutputMode) -> anyhow::Result<()> {
                 }
             });
 
+            progress_tx.send(ProgressMessage::Finished { phase: ProgressPhase::Parsing }).ok();
+
             if output_mode.is_human() {
-                println!("\n📊 Indexing Summary:");
-                println!("   Unchanged: {}", stats.unchanged);
-                println!("   Added:     {}", stats.added);
-                println!("   Modified:  {}", stats.modified);
-                println!("   Deleted:   {}", stats.deleted);
-                println!("   Errors:    {}", stats.errors);
-                println!("   ⏱️  Indexing took: {:?}", start_indexing.elapsed());
+                section("Indexing Summary");
+                summary_row("Unchanged", &stats.unchanged.to_string());
+                summary_row("Added", &stats.added.to_string());
+                summary_row("Modified", &stats.modified.to_string());
+                summary_row("Deleted", &stats.deleted.to_string());
+                summary_row("Errors", &stats.errors.to_string());
+                timing(&format!("{:?}", start_indexing.elapsed()));
             }
 
             // Phase 2: Linking
             let something_changed = stats.added > 0 || stats.modified > 0 || stats.deleted > 0;
             let unresolved_count = store.count_unresolved()?;
-            
+
             if something_changed || unresolved_count > 0 {
-                // If specific files changed, we might want to only resolve relevant things, 
-                // but for now, global re-link is safer and simpler.
-                
-                // We must clear old linking state if we re-link? 
-                // `delete_file_data` removes unresolved refs from modified files.
-                // But `store.clear_unresolved()` was done previously for *everything*.
-                // Now we keep unresolved refs from unchanged files.
-                // But GlobalLinker might generate edges. 
-                // Existing resolved edges?
-                // `GlobalLinker` currently iterates `unresolved_references`.
-                // It inserts edges.
-                // We should probably NOT clear *all* edges, only edges from modified files are gone.
-                // Edges *to* modified files are also gone (handled in delete_file_data).
-                
+                progress_tx.send(ProgressMessage::Started { phase: ProgressPhase::Linking, total: unresolved_count }).ok();
+
                 if output_mode.is_human() {
-                    println!("\n🔗 Phase 2: Running Global Linker...");
+                    phase("Linking Symbols");
+                    info("Unresolved", &unresolved_count.to_string());
                 }
                 let start_linking = std::time::Instant::now();
                 let linker = coderev::linker::GlobalLinker::new(&store);
@@ -1125,23 +1157,28 @@ async fn run(cli: Cli, output_mode: OutputMode) -> anyhow::Result<()> {
                 linking_ms = Some(start_linking.elapsed().as_millis());
                 if output_mode.is_human() {
                     println!("{}", stats);
-                    println!("   ⏱️  Linking took: {:?}", start_linking.elapsed());
+                    timing(&format!("{:?}", start_linking.elapsed()));
                 }
-                
+
+                progress_tx.send(ProgressMessage::Finished { phase: ProgressPhase::Linking }).ok();
+
                 // Phase 3: Embeddings
                 // Only for new symbols
                 let symbols_to_embed = store.find_symbols_without_embeddings()?;
-                
+
                 // Create embedding engine ONCE and reuse for phase 3 and 4
                 let engine = coderev::query::EmbeddingEngine::new()?;
-                
+
                 if !symbols_to_embed.is_empty() {
                     embedded_symbols = symbols_to_embed.len();
+                    progress_tx.send(ProgressMessage::Started { phase: ProgressPhase::Embedding, total: symbols_to_embed.len() }).ok();
+
                     if output_mode.is_human() {
-                        println!("\n🧠 Phase 3: Generating Embeddings ({} new symbols)...", symbols_to_embed.len());
+                        phase("Generating Embeddings");
+                        info("Symbols", &symbols_to_embed.len().to_string());
                     }
                     let start_embeddings = std::time::Instant::now();
-                    let batch_size = 64; // Increased from 32 for better throughput
+                    let batch_size = 64;
                     let mut processed = 0;
                     for chunk in symbols_to_embed.chunks(batch_size) {
                         let embeddings = engine.embed_symbols(chunk)?;
@@ -1151,6 +1188,11 @@ async fn run(cli: Cli, output_mode: OutputMode) -> anyhow::Result<()> {
                         }
                         store.commit()?;
                         processed += chunk.len();
+                        progress_tx.send(ProgressMessage::Progress {
+                            phase: ProgressPhase::Embedding,
+                            current: processed,
+                            file: None,
+                        }).ok();
                         if output_mode.is_human() {
                             print!("\r   Progress: {}/{} symbols", processed, symbols_to_embed.len());
                             std::io::stdout().flush().ok();
@@ -1158,15 +1200,19 @@ async fn run(cli: Cli, output_mode: OutputMode) -> anyhow::Result<()> {
                     }
                     embedding_ms = Some(start_embeddings.elapsed().as_millis());
                     if output_mode.is_human() {
-                        println!(); // New line after progress
-                        println!("   ⏱️  Embeddings took: {:?}", start_embeddings.elapsed());
+                        println!();
+                        timing(&format!("{:?}", start_embeddings.elapsed()));
                     }
+
+                    progress_tx.send(ProgressMessage::Finished { phase: ProgressPhase::Embedding }).ok();
                 }
 
                 // Phase 4: Semantic Resolution
                 // Reuse the same engine (no model reload!)
+                progress_tx.send(ProgressMessage::Started { phase: ProgressPhase::Semantic, total: 0 }).ok();
+
                 if output_mode.is_human() {
-                    println!("\n🧠 Phase 4: Running Semantic Resolver...");
+                    phase("Semantic Resolution");
                 }
                 let start_semantic = std::time::Instant::now();
                 let semantic_linker = coderev::linker::SemanticLinker::new(&store, &engine);
@@ -1175,21 +1221,24 @@ async fn run(cli: Cli, output_mode: OutputMode) -> anyhow::Result<()> {
                 semantic_ms = Some(start_semantic.elapsed().as_millis());
                 if output_mode.is_human() {
                     if stats.resolved > 0 {
-                        println!("✅ Semantic Resolved: {}", stats.resolved);
+                        success(&format!("Resolved {} symbols", stats.resolved));
                     }
-                    println!("   ⏱️  Semantic Resolution took: {:?}", start_semantic.elapsed());
+                    timing(&format!("{:?}", start_semantic.elapsed()));
                 }
+
+                progress_tx.send(ProgressMessage::Finished { phase: ProgressPhase::Semantic }).ok();
             } else {
                 if output_mode.is_human() {
-                    println!("\n✨ Repository is up to date.");
+                    info("Status", "Repository is up to date");
                 }
             }
 
             // Show final stats
             let final_stats = store.stats()?;
             if output_mode.is_human() {
-                println!("\n{}", final_stats);
-                println!("\n⏱️  Total time: {:?}", total_start.elapsed());
+                println!();
+                println!("{}", final_stats);
+                timing(&format!("Total: {:?}", total_start.elapsed()));
             }
 
             if output_mode.is_machine() {
@@ -1256,7 +1305,7 @@ async fn run(cli: Cli, output_mode: OutputMode) -> anyhow::Result<()> {
                 // But ensure_embeddings prints progress, so the user knows what's happening.
                 let _ = ensure_embeddings(&store)?;
                 if output_mode.is_human() {
-                    println!("🧠 [Local Embedding] Searching for: '{}'...", query);
+                    info("Searching", &format!("'{}'", query));
                 }
                 let engine = QueryEngine::new(&store);
                 match coderev::query::EmbeddingEngine::new() {
@@ -1535,8 +1584,7 @@ async fn run(cli: Cli, output_mode: OutputMode) -> anyhow::Result<()> {
             let stats = store.stats()?;
             
             if output_mode.is_human() {
-                println!("📊 Coderev Statistics ({:?})", database);
-                println!("------------------------------------");
+                section("Statistics");
                 println!("{}", stats);
             } else if matches!(output_mode, OutputMode::Json) {
                 let data = serde_json::json!({
@@ -1583,11 +1631,12 @@ async fn run(cli: Cli, output_mode: OutputMode) -> anyhow::Result<()> {
             }
             
             if output_mode.is_human() {
-                println!("🔗 Running Global Linker on {} unresolved references...", unresolved_count);
+                phase("Linking");
+                info("Unresolved", &unresolved_count.to_string());
             }
             
             if verbose && output_mode.is_human() {
-                println!("\nUnresolved references:");
+                section("Unresolved");
                 for unresolved in store.get_all_unresolved()? {
                     println!("  - {} (from {} @ line {})", 
                         unresolved.name, 
@@ -1604,9 +1653,8 @@ async fn run(cli: Cli, output_mode: OutputMode) -> anyhow::Result<()> {
                 println!("{}", stats);
             }
 
-            // Run Semantic Resolver
             if output_mode.is_human() {
-                println!("\n🧠 Running Semantic Resolver...");
+                phase("Semantic Resolution");
             }
             let embedded = ensure_embeddings(&store)?;
             
@@ -1992,7 +2040,8 @@ fn ensure_resolved(store: &SqliteStore) -> anyhow::Result<()> {
     let unresolved_count = store.count_unresolved()?;
     if unresolved_count > 0 {
         if !coderev::output::is_quiet() {
-            println!("🔗 On-demand: Resolving {} references...", unresolved_count);
+            phase("Linking");
+            info("Unresolved", &unresolved_count.to_string());
         }
         let linker = coderev::linker::GlobalLinker::new(store);
         let stats = linker.run()?;
@@ -2001,7 +2050,7 @@ fn ensure_resolved(store: &SqliteStore) -> anyhow::Result<()> {
         }
         
         if !coderev::output::is_quiet() {
-            println!("🧠 On-demand: Running Semantic Resolver...");
+            phase("Semantic Resolution");
         }
         // This requires a mutable store, but we got an immutable one.
         // We'll have to reopen it or skip.

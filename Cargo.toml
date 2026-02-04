@@ -31,6 +31,15 @@ toml = "0.8"
 # CLI
 clap = { version = "4.5", features = ["derive"] }
 
+# UI - Beautiful terminal output
+indicatif = "0.17"
+console = "0.15"
+tabled = "0.16"
+owo-colors = "4"
+
+# Concurrency for progress updates
+crossbeam = "0.8"
+
 # Error handling
 thiserror = "2.0"
 anyhow = "1.0"

@@ -22,6 +22,7 @@ pub mod server;
 pub mod watcher;
 pub mod output;
 pub mod config;
+pub mod ui;
 
 
 // Re-exports for convenient access
