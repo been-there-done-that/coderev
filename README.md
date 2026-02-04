@@ -10,62 +10,97 @@ Coderev is a local-first engine that parses your repository, resolves symbol rel
 
 ---
 
-## ⚡ Quick Start
-
-Get up and running in seconds:
+## ⚡ Quick Start (macOS/Linux)
 
 ```bash
-# Install via Homebrew
+# 1. Install via Homebrew
 brew tap been-there-done-that/coderev && brew install coderev
 
-# Or install from source
+# 2. Initialize in your project
+coderev init
+
+# 3. Index and Search
+coderev index
+coderev search --query "how is auth handled?"
+```
+
+---
+
+## 💻 Installation
+
+### macOS & Linux
+- **Homebrew**: `brew tap been-there-done-that/coderev && brew install coderev`
+- **Shell Script**: `curl -sSL https://raw.githubusercontent.com/been-there-done-that/coderev/main/install.sh | sh`
+
+### Windows
+- **Downloads**: Grab `coderev.exe` from the [Releases](https://github.com/been-there-done-that/coderev/releases).
+- **PowerShell**: `iwr https://raw.githubusercontent.com/been-there-done-that/coderev/main/install.ps1 | iex`
+
+### From Source (Universal)
+```bash
+git clone https://github.com/been-there-done-that/coderev.git
+cd coderev
 cargo install --path .
-
-# Index your first project
-coderev index --path ./my-awesome-project
 ```
 
 ---
 
-## 🔥 Key Highlights
+## 🚀 Post-Installation: First Steps
 
-| Feature | Description |
+### 1) Initialize (`coderev init`)
+Run this in your project root to create `coderev.toml`. This tells Coderev where to store its database (default: `.coderev/`) and automatically adds the directory to your `.gitignore`.
+
+### 2) Index (`coderev index`)
+Build the graph. Use the `--verbose` flag to see the compiler-grade parsing pipeline in action.
+```bash
+coderev index --verbose
+```
+
+### 3) Verify Health
+Check if your index is healthy and see symbol coverage:
+```bash
+coderev stats
+```
+
+---
+
+## 🛠️ Practical Usage & Flags
+
+| Need | Command |
 | :--- | :--- |
-| **Compiler-Grade Graph** | Symbols, definitions, references, callers, and impact paths. |
-| **Local AI Search** | Semantic search over real symbols and their implementation context. |
-| **MCP Ready** | Connect AI agents via the Model Context Protocol in one command. |
-| **Live Indexing** | Watch mode keeps your graph fresh as you type. |
-| **SQLite Substrate** | An open, inspectable store to build your own custom tools. |
+| **Semantic Search** | `coderev search --query "auth" --limit 5` |
+| **Trace Callers** | `coderev callers --uri "codescope://..."` |
+| **Trace Impact** | `coderev impact --uri "codescope://..." --depth 3` |
+| **JSON Output** | `coderev search --query "auth" --json` |
+| **Compact JSON** | `coderev search --query "auth" --compact` |
+| **Watch Files** | `coderev watch --background` |
 
 ---
 
-## 📖 Documentation
+## 🤖 For AI Agents & Developers
 
-Explore the comprehensive guides to get the most out of Coderev:
+Coderev is designed to be the "intelligent substrate" for AI agents.
 
-- 🚀 **[Getting Started](docs/getting-started.md)**: Installation, first index, and basic usage.
-- 🤖 **[MCP Guide](docs/mcp-guide.md)**: Integrating AI agents like Claude and ChatGPT.
-- 🛠️ **[CLI Reference](docs/cli-reference.md)**: Full command and flag documentation.
-- 🏗️ **[Architecture](docs/architecture.md)**: Deep dive into the technical internals.
-- 📊 **[Benchmarks](docs/benchmarks.md)**: Reproducible performance comparisons.
+### 🔌 MCP Integration
+Connect agents like Claude Desktop or ChatGPT directly to your codebase:
+1. Run `coderev agent-setup`.
+2. Configure your agent to use `coderev mcp`.
+3. See the **[MCP Guide](docs/mcp-guide.md)** for detailed setup.
+
+### 🧠 Agentic Skills
+Agents can use the **[SKILLS.md](SKILLS.md)** file to understand how to leverage Coderev tools for self-directed code navigation and refactoring.
+
+### 🧪 Verification for Agents
+Agents should run `coderev --help` or `coderev stats --json` to verify the environment is correctly configured before starting work.
 
 ---
 
-## 🗺️ How It Works
+## 📖 Deep Dives
 
-Coderev builds an end-to-end code intelligence pipeline on your local machine:
-
-```mermaid
-graph TD
-    A[Repo Files] --> B[Tree-sitter Parsers]
-    B --> C[Symbol + Scope Extraction]
-    C --> D[(SQLite Graph Store)]
-    D --> E[Resolver: callers/callees]
-    E --> D
-    D --> F[FastEmbed Vectors]
-    F --> D
-    D --> G[Query Engine]
-```
+- 🏗️ **[Architecture](docs/architecture.md)**: How the graph engine works.
+- 🛠️ **[CLI Reference](docs/cli-reference.md)**: Exhaustive list of commands and flags.
+- 📊 **[Benchmarks](docs/benchmarks.md)**: Latency and QA results.
+- 🌍 **[Language Support](README.md#language-support)**: Tiered support for Python, Rust, TS, and more.
 
 ---
 
@@ -78,10 +113,6 @@ graph TD
 | **Tier 3** | All others | Semantic search via smart chunking. |
 
 ---
-
-## 🤝 Contributing
-
-Contributions are welcome! Please check our **[Architecture guide](docs/architecture.md)** to understand the core engine before submitting PRs.
 
 ## 📄 License
 
