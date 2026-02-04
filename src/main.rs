@@ -827,7 +827,32 @@ async fn run(cli: Cli, output_mode: OutputMode) -> anyhow::Result<()> {
 
             config::ensure_db_dir(&db)?;
             config::ensure_gitignore(&target_path)?;
-            config::write_config(&cfg_path, &cfg, force)?;
+
+            if cfg_path.exists() && !force {
+                if output_mode.is_human() {
+                    use std::io::Write;
+                    let cwd = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
+                    let display_path = cfg_path.strip_prefix(&cwd).unwrap_or(&cfg_path);
+                    
+                    println!();
+                    println!("⚠️  Config already exists at {}", display_path.display().style(coderev::ui::theme().warn.clone()));
+                    print!("Overwrite? (y/N) [default: n]: ");
+                    std::io::stdout().flush()?;
+                    
+                    let mut input = String::new();
+                    std::io::stdin().read_line(&mut input)?;
+                    
+                    if input.trim().to_lowercase() != "y" {
+                        println!("Aborted.");
+                        return Ok(());
+                    }
+                    config::write_config(&cfg_path, &cfg, true)?;
+                } else {
+                     anyhow::bail!("config already exists at {} (use --force to overwrite)", cfg_path.display());
+                }
+            } else {
+                 config::write_config(&cfg_path, &cfg, force)?;
+            }
 
             if output_mode.is_human() {
                 success(&format!("Wrote config to {}", cfg_path.display()));
@@ -1276,7 +1301,7 @@ async fn run(cli: Cli, output_mode: OutputMode) -> anyhow::Result<()> {
                 }
 
                 if linker_stats.is_some() {
-                    table.add_separator();
+
                     if let Some(ref s) = linker_stats {
                         table.add_row("Symbols (Linked)", &format!("{}", s.total));
                         table.add_row("  ✅ Resolved", &format!("{}", s.resolved));
@@ -1288,7 +1313,7 @@ async fn run(cli: Cli, output_mode: OutputMode) -> anyhow::Result<()> {
                 }
 
                 if embedded_symbols > 0 {
-                    table.add_separator();
+
                     table.add_row("Embeddings Generated", &format!("{}", embedded_symbols));
                     if let Some(ms) = embedding_ms {
                         table.add_row("⏱️ Embedding", &format!("{:?}", std::time::Duration::from_millis(ms as u64)));
@@ -1296,7 +1321,7 @@ async fn run(cli: Cli, output_mode: OutputMode) -> anyhow::Result<()> {
                 }
 
                 if let Some(ref s) = semantic_stats {
-                    table.add_separator();
+
                     table.add_row("Semantic Resolution", &format!("{}", s.total));
                     table.add_row("  🧠 Resolved", &format!("{}", s.resolved));
                     if let Some(ms) = semantic_ms {
@@ -1304,7 +1329,7 @@ async fn run(cli: Cli, output_mode: OutputMode) -> anyhow::Result<()> {
                     }
                 }
 
-                table.add_separator();
+
                 let final_stats = store.stats().unwrap_or_default();
                 table.add_row("Database Total", "");
                 table.add_row("  🔖 Symbols", &format!("{}", final_stats.symbols));
@@ -1313,7 +1338,7 @@ async fn run(cli: Cli, output_mode: OutputMode) -> anyhow::Result<()> {
                     table.add_row("  📦 Size", &coderev::ui::human_bytes(meta.len()));
                 }
                 
-                table.add_separator();
+
                 table.add_row("🚀 Total Duration", &format!("{:.2}s", total_start.elapsed().as_secs_f64()));
                 
                 println!("{}", table.build());
