@@ -3,6 +3,7 @@ name = "coderev"
 version = "0.1.0"
 edition = "2024"
 description = "Universal Code Intelligence Substrate - Language-agnostic AST-native semantic code graph"
+repository = "https://github.com/been-there-done-that/coderev"
 license = "MIT"
 
 [[bin]]

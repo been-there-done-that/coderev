@@ -89,22 +89,32 @@ target/release/coderev init --path /path/to/your/project
 This writes `coderev.toml` so you can omit `--path` and `--database` later.  
 By default the database is stored at `.coderev/coderev.db`, and `.coderev/` is added to `.gitignore`.
 
-## Installation (From Source)
+## Installation
 
-### macOS / Linux
+### Homebrew (macOS)
 
+```bash
+brew tap been-there-done-that/coderev
+brew install coderev
+```
+
+### Windows (Release Binary)
+1. Download `coderev.exe` from the [Releases page](https://github.com/been-there-done-that/coderev/releases).
+2. Add it to your `PATH`.
+
+### From Source
+
+#### macOS / Linux script
 ```bash
 ./install.sh
 ```
 
-### Windows (PowerShell)
-
+#### Windows PowerShell script
 ```powershell
 ./install.ps1
 ```
 
-### Cargo (local install)
-
+#### Cargo (local install)
 ```bash
 cargo install --path .
 ```

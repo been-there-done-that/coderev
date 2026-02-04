@@ -20,6 +20,7 @@ pub mod query;
 pub mod linker;
 pub mod server;
 pub mod watcher;
+pub mod ignore;
 pub mod output;
 pub mod config;
 pub mod ui;

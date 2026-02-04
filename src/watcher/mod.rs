@@ -10,15 +10,20 @@ pub struct Watcher {
     store: SqliteStore,
     config: Option<crate::config::CoderevConfig>,
     embedding_engine: std::sync::Arc<std::sync::Mutex<Option<crate::query::EmbeddingEngine>>>,
+    ignore_filter: crate::ignore::IgnoreFilter,
 }
 
 impl Watcher {
     pub fn new(path: PathBuf, store: SqliteStore, config: Option<crate::config::CoderevConfig>) -> Self {
+        let extra_excludes = config.as_ref().and_then(|c| c.exclude.as_deref());
+        let ignore_filter = crate::ignore::IgnoreFilter::new(&path, extra_excludes);
+        
         Self { 
             path, 
             store,
             config,
             embedding_engine: std::sync::Arc::new(std::sync::Mutex::new(None)),
+            ignore_filter,
         }
     }
 
@@ -75,6 +80,10 @@ impl Watcher {
     }
 
     fn remove_file(&self, path: &std::path::Path) {
+        if self.ignore_filter.is_ignored(path, false) {
+             return;
+        }
+
         let relative_path = path.strip_prefix(&self.path).unwrap_or(path);
         let relative_path_str = relative_path.to_str().unwrap_or("").to_string();
         
@@ -91,15 +100,14 @@ impl Watcher {
     }
 
     fn process_file(&self, path: &std::path::Path) {
-        let relative_path = path.strip_prefix(&self.path).unwrap_or(path);
-        let relative_path_str = relative_path.to_str().unwrap_or("").to_string();
-        
-        let ext = path.extension().and_then(|s| s.to_str()).unwrap_or("").to_lowercase();
-        let skip_exts = ["png", "jpg", "jpeg", "gif", "ico", "exe", "dll", "so", "o", "a", "lib", "bin", "pdf", "zip", "tar", "gz", "wasm", "node", "db", "sqlite", "lock", "pyc", "svg", "git"];
-        if skip_exts.contains(&ext.as_str()) {
+        // 0. Pre-filtering
+        if self.ignore_filter.is_ignored(path, false) {
             return;
         }
 
+        let relative_path = path.strip_prefix(&self.path).unwrap_or(path);
+        let relative_path_str = relative_path.to_str().unwrap_or("").to_string();
+        
         if let Some(cfg) = &self.config {
             if cfg.should_skip(path, &self.path) {
                 return;
