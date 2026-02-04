@@ -680,7 +680,7 @@ fn resolve_path(cli: Option<PathBuf>, config: &Option<CoderevConfig>) -> anyhow:
             return Ok(PathBuf::from(path));
         }
     }
-    anyhow::bail!("missing --path (or set path in coderev.toml)");
+    Ok(std::env::current_dir()?)
 }
 
 fn resolve_repo(cli: Option<String>, config: &Option<CoderevConfig>, path: &PathBuf) -> String {
@@ -694,7 +694,12 @@ fn resolve_repo(cli: Option<String>, config: &Option<CoderevConfig>, path: &Path
     }
     path.file_name()
         .map(|s| s.to_string_lossy().to_string())
-        .unwrap_or_else(|| "unknown".to_string())
+        .unwrap_or_else(|| {
+            std::env::current_dir()
+                .ok()
+                .and_then(|p| p.file_name().map(|s| s.to_string_lossy().to_string()))
+                .unwrap_or_else(|| "unknown".to_string())
+        })
 }
 
 struct WatchFiles {
@@ -795,7 +800,12 @@ async fn run(cli: Cli, output_mode: OutputMode) -> anyhow::Result<()> {
                 target_path
                     .file_name()
                     .map(|s| s.to_string_lossy().to_string())
-                    .unwrap_or_else(|| "unknown".to_string())
+                    .unwrap_or_else(|| {
+                        std::env::current_dir()
+                            .ok()
+                            .and_then(|p| p.file_name().map(|s| s.to_string_lossy().to_string()))
+                            .unwrap_or_else(|| "unknown".to_string())
+                    })
             });
             let db = database.unwrap_or_else(|| config::default_database_path_in(&target_path));
             let cfg = CoderevConfig {
@@ -878,7 +888,12 @@ async fn run(cli: Cli, output_mode: OutputMode) -> anyhow::Result<()> {
                 let db_path = config::default_database_path_in(&path);
                 let auto_cfg = CoderevConfig {
                     database: Some(db_path.display().to_string()),
-                    repo: Some(path.file_name().map(|s| s.to_string_lossy().to_string()).unwrap_or_else(|| "unknown".to_string())),
+                    repo: Some(path.file_name().map(|s| s.to_string_lossy().to_string()).unwrap_or_else(|| {
+                        std::env::current_dir()
+                            .ok()
+                            .and_then(|p| p.file_name().map(|s| s.to_string_lossy().to_string()))
+                            .unwrap_or_else(|| "unknown".to_string())
+                    })),
                     path: Some(path.display().to_string()),
                 };
                 config::ensure_db_dir(&db_path)?;
@@ -1218,16 +1233,20 @@ async fn run(cli: Cli, output_mode: OutputMode) -> anyhow::Result<()> {
                     table.add_row("⏱️ Parsing", &format!("{:?}", std::time::Duration::from_millis(ms as u64)));
                 }
 
-                if let Some(ref s) = linker_stats {
-                    table.add_row("Symbols (Linked)", &format!("{}", s.total));
-                    table.add_row("  ✅ Resolved", &format!("{}", s.resolved));
-                    table.add_row("  🌍 External", &format!("{}", s.external));
-                    if let Some(ms) = linking_ms {
-                        table.add_row("⏱️ Linking", &format!("{:?}", std::time::Duration::from_millis(ms as u64)));
+                if linker_stats.is_some() {
+                    table.add_separator();
+                    if let Some(ref s) = linker_stats {
+                        table.add_row("Symbols (Linked)", &format!("{}", s.total));
+                        table.add_row("  ✅ Resolved", &format!("{}", s.resolved));
+                        table.add_row("  🌍 External", &format!("{}", s.external));
+                        if let Some(ms) = linking_ms {
+                            table.add_row("⏱️ Linking", &format!("{:?}", std::time::Duration::from_millis(ms as u64)));
+                        }
                     }
                 }
 
                 if embedded_symbols > 0 {
+                    table.add_separator();
                     table.add_row("Embeddings Generated", &format!("{}", embedded_symbols));
                     if let Some(ms) = embedding_ms {
                         table.add_row("⏱️ Embedding", &format!("{:?}", std::time::Duration::from_millis(ms as u64)));
@@ -1235,6 +1254,7 @@ async fn run(cli: Cli, output_mode: OutputMode) -> anyhow::Result<()> {
                 }
 
                 if let Some(ref s) = semantic_stats {
+                    table.add_separator();
                     table.add_row("Semantic Resolution", &format!("{}", s.total));
                     table.add_row("  🧠 Resolved", &format!("{}", s.resolved));
                     if let Some(ms) = semantic_ms {
@@ -1242,13 +1262,17 @@ async fn run(cli: Cli, output_mode: OutputMode) -> anyhow::Result<()> {
                     }
                 }
 
+                table.add_separator();
                 let final_stats = store.stats().unwrap_or_default();
                 table.add_row("Database Total", "");
                 table.add_row("  🔖 Symbols", &format!("{}", final_stats.symbols));
                 table.add_row("  🔗 Edges", &format!("{}", final_stats.edges));
+                if let Ok(meta) = std::fs::metadata(&database) {
+                    table.add_row("  📦 Size", &coderev::ui::human_bytes(meta.len()));
+                }
                 
-                table.add_row("━━━━━━━━━━━━━━━━━━━━", "━━━━━━━━━━");
-                table.add_row("🚀 Total Duration", &format!("{:?}", total_start.elapsed()));
+                table.add_separator();
+                table.add_row("🚀 Total Duration", &format!("{:.2}s", total_start.elapsed().as_secs_f64()));
                 
                 println!("{}", table.build());
             }

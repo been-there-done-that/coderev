@@ -1,4 +1,4 @@
-use tabled::{settings::Style, Table, Tabled};
+use tabled::{settings::{Style, themes::Theme, style::HorizontalLine}, Table, Tabled};
 
 #[derive(Tabled)]
 pub struct TableRow {
@@ -10,11 +10,15 @@ pub struct TableRow {
 
 pub struct TableBuilder {
     rows: Vec<TableRow>,
+    separators: Vec<usize>,
 }
 
 impl TableBuilder {
     pub fn new() -> Self {
-        Self { rows: Vec::new() }
+        Self { 
+            rows: Vec::new(),
+            separators: Vec::new(),
+        }
     }
 
     pub fn add_row(&mut self, label: &str, value: &str) {
@@ -24,14 +28,34 @@ impl TableBuilder {
         });
     }
 
+    pub fn add_separator(&mut self) {
+        if !self.rows.is_empty() {
+            self.separators.push(self.rows.len());
+        }
+    }
+
     pub fn build(&self) -> String {
         if self.rows.is_empty() {
             return String::new();
         }
 
-        let table = Table::new(&self.rows).with(Style::rounded()).to_string();
+        let mut table = Table::new(&self.rows);
+        let mut theme = Theme::from(Style::modern());
+        theme.remove_horizontal_lines();
+        
+        // Add header separator (between header and first data row)
+        // Row 0 is header.
+        theme.insert_horizontal_line(1, HorizontalLine::inherit(Style::modern()));
 
-        table
+        for &idx in &self.separators {
+            // idx is number of data rows added.
+            // If we have 1 header + N data rows, indices are 0..=N.
+            // A separator below data row idx (which is row idx in the table)
+            // will be at index idx+1.
+            theme.insert_horizontal_line(idx + 1, HorizontalLine::inherit(Style::modern()));
+        }
+
+        table.with(theme).to_string()
     }
 }
 
