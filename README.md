@@ -18,7 +18,7 @@ Coderev is a local-first engine that parses your repository, resolves symbol rel
 ### macOS & Linux
 ```bash
 # Install
-brew tap been-there-done-that/coderev && brew install coderev
+brew tap been-there-done-that/tap && brew install coderev
 
 # Initialize & Index
 coderev init && coderev index
@@ -50,7 +50,7 @@ coderev search --query "how is auth handled?"
 
 **Homebrew:**
 ```bash
-brew tap been-there-done-that/coderev
+brew tap been-there-done-that/tap
 brew install coderev
 ```
 
