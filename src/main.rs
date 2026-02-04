@@ -816,7 +816,7 @@ async fn run(cli: Cli, output_mode: OutputMode) -> anyhow::Result<()> {
 
             let cfg_path = config_path
                 .or(global_config_path)
-                .unwrap_or_else(config::default_config_path);
+                .unwrap_or_else(|| config::default_config_path_in(&target_path));
 
             config::ensure_db_dir(&db)?;
             config::ensure_gitignore(&target_path)?;
@@ -883,7 +883,7 @@ async fn run(cli: Cli, output_mode: OutputMode) -> anyhow::Result<()> {
         Commands::Index { path, database, repo } => {
             let total_start = std::time::Instant::now();
             let path = resolve_path(path, &cfg_opt)?;
-            let cfg_path = global_config_path.clone().unwrap_or_else(config::default_config_path);
+            let cfg_path = global_config_path.clone().unwrap_or_else(|| config::default_config_path_in(&path));
             if cfg_opt.is_none() && !cfg_path.exists() {
                 let db_path = config::default_database_path_in(&path);
                 let auto_cfg = CoderevConfig {

@@ -6,10 +6,16 @@ pub struct CoderevConfig {
     pub database: Option<String>,
     pub repo: Option<String>,
     pub path: Option<String>,
+    pub include: Option<Vec<String>>,
+    pub exclude: Option<Vec<String>>,
 }
 
 pub fn default_config_path() -> PathBuf {
-    PathBuf::from("coderev.toml")
+    PathBuf::from(".coderev").join("coderev.toml")
+}
+
+pub fn default_config_path_in(base: &Path) -> PathBuf {
+    base.join(".coderev").join("coderev.toml")
 }
 
 pub fn default_database_path_in(base: &Path) -> PathBuf {
