@@ -1,6 +1,6 @@
 # Coderev
 
-[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 [![Build Status](https://img.shields.io/github/actions/workflow/status/been-there-done-that/coderev/release.yml?branch=main)](https://github.com/been-there-done-that/coderev/actions)
 [![Version](https://img.shields.io/github/v/release/been-there-done-that/coderev)](https://github.com/been-there-done-that/coderev/releases)
 
@@ -10,17 +10,32 @@ Coderev is a local-first engine that parses your repository, resolves symbol rel
 
 ---
 
-## ⚡ Quick Start (macOS/Linux)
+## ⚡ Quick Start
 
+> [!TIP]
+> Use these one-liners to get started immediately.
+
+### macOS & Linux
 ```bash
-# 1. Install via Homebrew
+# Install
 brew tap been-there-done-that/coderev && brew install coderev
 
-# 2. Initialize in your project
-coderev init
+# Initialize & Index
+coderev init && coderev index
 
-# 3. Index and Search
-coderev index
+# Search
+coderev search --query "how is auth handled?"
+```
+
+### Windows (PowerShell)
+```powershell
+# Install
+iwr https://raw.githubusercontent.com/been-there-done-that/coderev/main/install.ps1 | iex
+
+# Initialize & Index
+coderev init; coderev index
+
+# Search
 coderev search --query "how is auth handled?"
 ```
 
@@ -28,15 +43,35 @@ coderev search --query "how is auth handled?"
 
 ## 💻 Installation
 
-### macOS & Linux
-- **Homebrew**: `brew tap been-there-done-that/coderev && brew install coderev`
-- **Shell Script**: `curl -sSL https://raw.githubusercontent.com/been-there-done-that/coderev/main/install.sh | sh`
+### macOS & Linux (Unix)
+
+> [!NOTE]
+> Homebrew is the recommended method for macOS users.
+
+**Homebrew:**
+```bash
+brew tap been-there-done-that/coderev
+brew install coderev
+```
+
+**Direct Script:**
+```bash
+curl -sSL https://raw.githubusercontent.com/been-there-done-that/coderev/main/install.sh | sh
+```
 
 ### Windows
-- **Downloads**: Grab `coderev.exe` from the [Releases](https://github.com/been-there-done-that/coderev/releases).
-- **PowerShell**: `iwr https://raw.githubusercontent.com/been-there-done-that/coderev/main/install.ps1 | iex`
+
+**PowerShell (Automatic):**
+```powershell
+iwr https://raw.githubusercontent.com/been-there-done-that/coderev/main/install.ps1 | iex
+```
+
+**Manual Binary:**
+1. Download `coderev.exe` from the [Releases](https://github.com/been-there-done-that/coderev/releases).
+2. Add the downloaded directory to your system `PATH`.
 
 ### From Source (Universal)
+
 ```bash
 git clone https://github.com/been-there-done-that/coderev.git
 cd coderev
@@ -45,75 +80,79 @@ cargo install --path .
 
 ---
 
-## 🚀 Post-Installation: First Steps
+## 🚀 Post-Installation: Setup & Verification
 
-### 1) Initialize (`coderev init`)
-Run this in your project root to create `coderev.toml`. This tells Coderev where to store its database (default: `.coderev/`) and automatically adds the directory to your `.gitignore`.
-
-### 2) Index (`coderev index`)
-Build the graph. Use the `--verbose` flag to see the compiler-grade parsing pipeline in action.
+### 1. Initialize (`coderev init`)
+Run this in your project root to create `coderev.toml`. This tells Coderev where to store its database and ensures `.coderev/` is added to your `.gitignore`.
 ```bash
+coderev init
+```
+
+### 2. Build the Graph (`coderev index`)
+Build the semantic graph and generate embeddings. 
+```bash
+# Standard index
+coderev index
+
+# Verbose mode (see the compiler pipeline)
 coderev index --verbose
 ```
 
-### 3) Verify Health
-Check if your index is healthy and see symbol coverage:
+### 3. Verify Health
+Ensure your installation is correct and see your codebase coverage:
 ```bash
+# Check stats
 coderev stats
+
+# Verify CLI version
+coderev --version
 ```
 
 ---
 
-## 🛠️ Practical Usage & Flags
+## 🛠️ Detailed Usage & Flags
 
-| Need | Command |
+| Goal | Command |
 | :--- | :--- |
 | **Semantic Search** | `coderev search --query "auth" --limit 5` |
 | **Trace Callers** | `coderev callers --uri "codescope://..."` |
-| **Trace Impact** | `coderev impact --uri "codescope://..." --depth 3` |
-| **JSON Output** | `coderev search --query "auth" --json` |
-| **Compact JSON** | `coderev search --query "auth" --compact` |
-| **Watch Files** | `coderev watch --background` |
+| **Impact Analysis** | `coderev impact --uri "codescope://..." --depth 3` |
+| **Machine Output** | `coderev search --query "auth" --json` |
+| **Compact Output** | `coderev search --query "auth" --compact` |
+| **Background Sync** | `coderev watch --background` |
 
 ---
 
-## 🤖 For AI Agents & Developers
+## 🤖 For AI Agents
 
-Coderev is designed to be the "intelligent substrate" for AI agents.
+Coderev is the ultimate "knowledge substrate" for AI agents.
 
-### 🔌 MCP Integration
-Connect agents like Claude Desktop or ChatGPT directly to your codebase:
-1. Run `coderev agent-setup`.
-2. Configure your agent to use `coderev mcp`.
-3. See the **[MCP Guide](docs/mcp-guide.md)** for detailed setup.
+### 🔌 MCP Integration (Claude/ChatGPT)
+Connect agents directly to your codebase using the **Model Context Protocol**:
+```bash
+# Setup MCP config
+coderev agent-setup
+
+# Start the server (usually called by the agent)
+coderev mcp --database .coderev/coderev.db
+```
+> [!IMPORTANT]
+> See the **[MCP Guide](docs/mcp-guide.md)** for full agent configuration.
 
 ### 🧠 Agentic Skills
-Agents can use the **[SKILLS.md](SKILLS.md)** file to understand how to leverage Coderev tools for self-directed code navigation and refactoring.
-
-### 🧪 Verification for Agents
-Agents should run `coderev --help` or `coderev stats --json` to verify the environment is correctly configured before starting work.
+AI agents should refer to **[SKILLS.md](SKILLS.md)** to learn how to expertly navigate and refactor code using Coderev's graph-grounded tools.
 
 ---
 
 ## 📖 Deep Dives
 
 - 🏗️ **[Architecture](docs/architecture.md)**: How the graph engine works.
-- 🛠️ **[CLI Reference](docs/cli-reference.md)**: Exhaustive list of commands and flags.
-- 📊 **[Benchmarks](docs/benchmarks.md)**: Latency and QA results.
-- 🌍 **[Language Support](README.md#language-support)**: Tiered support for Python, Rust, TS, and more.
-
----
-
-## 🌍 Language Support
-
-| Tier | Languages | Capability |
-| :--- | :--- | :--- |
-| **Tier 1** | Python | Full AST resolution, deep symbol graph. |
-| **Tier 2** | Rust, JS, TS, Go | Baseline parsing, call graph extraction. |
-| **Tier 3** | All others | Semantic search via smart chunking. |
+- 🛠️ **[CLI Reference](docs/cli-reference.md)**: Full list of commands.
+- 📊 **[Benchmarks](docs/benchmarks.md)**: Proof of performance.
+- 🌍 **[Language Support](docs/language-support.md)**: Tiered support details.
 
 ---
 
 ## 📄 License
 
-MIT © [Been There Done That](https://github.com/been-there-done-that)
+MIT © [Been There Done That](https://github.com/been-there-done-that) ([LICENSE](LICENSE))

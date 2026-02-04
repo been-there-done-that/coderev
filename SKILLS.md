@@ -1,54 +1,68 @@
 # Skill: Coderev Code Intelligence
 
-Use Coderev to navigate, search, and reason about codebases using a verified semantic graph. Unlike basic RAG, Coderev provides grounded relationships (callers/callees) and compiler-grade symbol resolution.
+> [!NOTE]
+> This skill enables AI agents to navigate and reason about codebases using a verified semantic graph.
 
-## Capabilities
-- **Semantic Search**: Find code based on conceptual meaning using vector embeddings.
-- **Call Graph Traversal**: Discover exact callers and callees of any function or method.
-- **Impact Analysis**: Predict the ripple effect of code changes across the codebase.
-- **MCP Integration**: Fully compatible with the Model Context Protocol for seamless agentic workflows.
+## Capability Description
+Coderev provides absolute ground truth for symbol relationships (callers/callees) and semantic search. Agents use this to bypass the limitations of standard text-based RAG.
 
-## Setup & Verification
+## Quick Installation & Verification
 
-### 1. Installation
-Agents can install Coderev using the following command:
+### Unix (macOS/Linux)
 ```bash
-# macOS/Linux
+# Install & Setup
 brew tap been-there-done-that/coderev && brew install coderev
+coderev init && coderev index
 
-# Source (Universal)
-cargo install --path .
-```
-
-### 2. Initialization
-Prepare the project for intelligence:
-```bash
-coderev init
-coderev index
-```
-
-### 3. Verification
-Verify the skill is active and healthy:
-```bash
+# Verify
 coderev stats --json
 ```
 
-## Agentic Workflow Examples
+### Windows (PowerShell)
+```powershell
+# Install & Setup
+iwr https://raw.githubusercontent.com/been-there-done-that/coderev/main/install.ps1 | iex
+coderev init; coderev index
 
-### Finding a Symbol
-"Search for where authentication logic is defined and show me its callers."
-1. `coderev search --query "authentication logic" --limit 1`
-2. `coderev callers --uri <URI_FROM_SEARCH>`
+# Verify
+coderev stats --json
+```
 
-### Analyzing Impact
-"What happens if I change the signature of `validate_session`?"
-1. `coderev impact --uri "codescope://repo/src/auth.rs#callable:validate_session" --depth 2`
+---
 
-## Tool Mapping
-| Agent Action | CLI Command |
-| :--- | :--- |
-| Search Meaning | `coderev search --query "<concept>"` |
-| Trace Callers | `coderev callers --uri "<uri>"` |
-| Trace Callees | `coderev callees --uri "<uri>"` |
-| Impact Map | `coderev impact --uri "<uri>"` |
-| System Health | `coderev stats` |
+## Agentic Workflows
+
+### 🔍 Discovery
+"Find where the API endpoints are defined."
+```bash
+coderev search --query "api endpoint definitions" --limit 5
+```
+
+### 🔗 Relationship Mapping
+"Trace all callers of the `validate` method."
+```bash
+coderev callers --uri <URI_FROM_SEARCH>
+```
+
+### 💥 Impact Analysis
+"What breaks if I change the DB schema?"
+```bash
+coderev impact --uri <SCHEMA_URI> --depth 2
+```
+
+---
+
+## Tool Reference for Agents
+
+| Action | Command | Output Mode Suggestion |
+| :--- | :--- | :--- |
+| **Search** | `coderev search --query "..."` | `--json` |
+| **Callers** | `coderev callers --uri "..."` | `--compact` |
+| **Callees** | `coderev callees --uri "..."` | `--compact` |
+| **Impact** | `coderev impact --uri "..."` | `--json` |
+| **Metadata** | `coderev stats` | `--json` |
+
+---
+
+> [!TIP]
+> Always use `--json` when pipes are involved for reliable programmatic parsing.
