@@ -92,6 +92,22 @@ impl SqliteStore {
             .map_err(Into::into)
     }
 
+    /// Find symbols in a specific file
+    pub fn find_symbols_by_file(&self, file_path_pattern: &str) -> Result<Vec<Symbol>> {
+        let conn = self.lock_conn()?;
+        // Match path exactly
+        let mut stmt = conn.prepare(
+            "SELECT uri, kind, name, path, line_start, line_end, doc, signature, content FROM symbols WHERE path = ?1"
+        )?;
+        
+        let symbol_iter = stmt.query_map([file_path_pattern], |row| self.row_to_symbol(row))?;
+        let mut symbols = Vec::new();
+        for symbol in symbol_iter {
+            symbols.push(symbol?);
+        }
+        Ok(symbols)
+    }
+
     /// Find symbols by name
     pub fn find_symbols_by_name(&self, name: &str) -> Result<Vec<Symbol>> {
         let conn = self.lock_conn()?;
@@ -394,6 +410,25 @@ impl SqliteStore {
             "INSERT OR REPLACE INTO embeddings (uri, vector) VALUES (?1, ?2)",
             params![uri_str, blob],
         )?;
+        Ok(())
+    }
+
+    pub fn insert_embeddings_batch(&self, symbols: &[crate::symbol::Symbol], embeddings: &[Vec<f32>]) -> Result<()> {
+        if symbols.len() != embeddings.len() {
+             return Err(crate::Error::Adapter("Symbols and embeddings count mismatch".into()));
+        }
+        
+        let mut conn = self.lock_conn()?;
+        let tx = conn.transaction()?;
+        {
+            let mut stmt = tx.prepare_cached("INSERT OR REPLACE INTO embeddings (uri, vector) VALUES (?1, ?2)")?;
+            for (symbol, vector) in symbols.iter().zip(embeddings.iter()) {
+                let uri_str = symbol.uri.to_uri_string();
+                let blob: Vec<u8> = vector.iter().flat_map(|f| f.to_le_bytes()).collect();
+                stmt.execute(params![uri_str, blob])?;
+            }
+        }
+        tx.commit()?;
         Ok(())
     }
 

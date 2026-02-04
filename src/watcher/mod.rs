@@ -7,11 +7,16 @@ use crate::output;
 pub struct Watcher {
     path: PathBuf,
     store: SqliteStore,
+    embedding_engine: std::sync::Arc<std::sync::Mutex<Option<crate::query::EmbeddingEngine>>>,
 }
 
 impl Watcher {
     pub fn new(path: PathBuf, store: SqliteStore) -> Self {
-        Self { path, store }
+        Self { 
+            path, 
+            store,
+            embedding_engine: std::sync::Arc::new(std::sync::Mutex::new(None)),
+        }
     }
 
     pub fn run(&self) -> anyhow::Result<()> {
@@ -24,6 +29,8 @@ impl Watcher {
         if !output::is_quiet() {
             println!("👀 Watching for changes in {:?}...", self.path);
         }
+        
+        // No async spawn needed here. We load lazily in process_file.
         
         for res in rx {
             match res {
@@ -146,6 +153,46 @@ impl Watcher {
                      &import.namespace,
                      Some(import.line),
                  ).ok();
+             }
+
+             // --- Background Linking & Embedding ---
+             // 1. Resolve references for this file
+             let linker = crate::linker::GlobalLinker::new(&self.store);
+             if let Ok(stats) = linker.resolve_file(&relative_path_str) {
+                 if !output::is_quiet() && stats.resolved > 0 {
+                     println!("🔗 Resolved {} references in background", stats.resolved);
+                 }
+             }
+
+             // 2. Generate Embeddings (if not chunks)
+             // We want to embed the newly inserted symbols.
+             if let Ok(symbols) = self.store.find_symbols_by_file(&relative_path_str) {
+                if !symbols.is_empty() {
+                     // Check if cached, or initialize
+                     let mut engine_guard = self.embedding_engine.lock().unwrap();
+                     if engine_guard.is_none() {
+                         match crate::query::EmbeddingEngine::new() {
+                             Ok(e) => {
+                                 *engine_guard = Some(e);
+                                 if !output::is_quiet() {
+                                     println!("🧠 Embedding engine initialized");
+                                 }
+                             },
+                             Err(e) => {
+                                 if !output::is_quiet() { println!("Failed to init embedding engine: {}", e); }
+                             }
+                         }
+                     }
+
+                     if let Some(engine) = engine_guard.as_ref() {
+                         if let Ok(embeddings) = engine.embed_symbols(&symbols) {
+                             self.store.insert_embeddings_batch(&symbols, &embeddings).ok();
+                             if !output::is_quiet() {
+                                 println!("🧠 Generated {} embeddings", embeddings.len());
+                             }
+                         }
+                     }
+                }
              }
         }
         

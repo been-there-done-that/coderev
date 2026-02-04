@@ -34,6 +34,15 @@ impl<'a> GlobalLinker<'a> {
 
     pub fn run(&self) -> Result<GlobalLinkerStats> {
         let unresolved = self.store.get_all_unresolved()?;
+        self.resolve_references(unresolved)
+    }
+
+    pub fn resolve_file(&self, file_path: &str) -> Result<GlobalLinkerStats> {
+        let unresolved = self.store.get_unresolved_in_file(file_path)?;
+        self.resolve_references(unresolved)
+    }
+
+    fn resolve_references(&self, unresolved: Vec<crate::storage::PersistedUnresolvedReference>) -> Result<GlobalLinkerStats> {
         let total = unresolved.len();
         let mut resolved = 0;
         let mut ambiguous = 0;
@@ -62,104 +71,15 @@ impl<'a> GlobalLinker<'a> {
                 
                 for import in imports {
                     // Case A: Import has an alias that matches the receiver or the name(if no receiver)
-                    // e.g. "import numpy as np" (alias=np), usage "np.array" (receiver=np)
-                    // e.g. "import math" (alias=math), usage "math.sqrt" (receiver=math)
-                    // e.g. "from math import sqrt as s", usage "s(1)" (name=s, receiver=None) -> import.alias=s matches name
-                    
-                    let mut matches_import = false;
-                    
-                    if let Some(ref recv) = ref_item.receiver {
-                        if let Some(ref alias) = import.alias {
-                            if alias == recv { matches_import = true; }
-                        } else {
-                            // No alias, so alias is implicitly the namespace (e.g. "import math" -> namespace="math")
-                            // Wait, extraction logic: "import a" -> alias=a, target=a.
-                            // So alias should be present if extracted correctly.
-                            // If alias is None, it might mean "from X import *" or just "import X" without alias capturing?
-                            // My extraction logic: "import a" -> alias=None? 
-                            // Check adapter: `alias: None`.
-                            // Wait, `import.module` in adapter sets alias=None.
-                            // So "import math" -> namespace="math", alias=None.
-                            // In this case, the receiver "math" should match namespace "math"?
-                            // Or should I fix adapter to set alias="math"?
-                            // Python: `import math`. Name bind is `math`.
-                            // So if alias is None, usage name/receiver matches imported namespace name?
-                            
-                            // Let's assume if alias is None, the namespace leaf is the name.
-                            let namespace_leaf = import.target_namespace.split('.').last().unwrap_or(&import.target_namespace);
-                            if namespace_leaf == recv { matches_import = true; }
-                        }
-                    } else {
-                        // No receiver. e.g. "sqrt(2)".
-                        // Check explicit imports: "from math import sqrt"
-                        // import.target_namespace = "math", import.symbols=["sqrt"] (Adapter handles "from_module")
-                        // Wait, my DB implementation for properties `symbols`?
-                        // `Import` struct in SqliteStore DOES NOT HAVE `symbols` list!
-                        // It only has `file_path, alias, target_namespace, line`.
-                        // One import row per import statement.
-                        // But "from math import sqrt, pi" creates ONE import record in ScopeGraph, but how is it stored in DB?
-                        // My storage code: `store.insert_import(...)`.
-                        // It iterates `res.scope_graph.imports`.
-                        // `ScopeGraph::Import` has `symbols: Vec<String>`.
-                        // BUT `insert_import` takes ONE alias.
-                        // The loop in `main.rs` iterates `res.scope_graph.imports` but essentially inserts ONE row per ScopeGraph::Import.
-                        // This assumes `alias` corresponds to the module alias.
-                        // It completely MISSES `symbols`.
-                        
-                        // FIX: I need to handle "from ... import ..." correctly.
-                        // If `symbols` list is not empty, it means specific symbols are imported.
-                        // For "from math import sqrt", `namespace`="math", `symbols`=["sqrt"].
-                        // The name "sqrt" is now bound in local scope.
-                        // References to "sqrt" should resolve to "math.sqrt".
-                        
-                        // My current DB schema for imports is insufficient for "from ... import a, b".
-                        // Use case: `name` matches one of the imported symbols.
-                        // But I don't have that list in DB.
-                        
-                        // Workaround for now:
-                        // If no candidates found, and we are in "Step 2",
-                        // logic is slightly broken for "from X import Y".
-                        // However, let's proceed with what we have (Module imports).
-                        // If I can match `name` to an import that might contain it...
-                        // Or relying on Adapter to have put it in scope? (Phase 1).
-                        // Phase 1 creates "UnresolvedReference".
-                        
-                        // Refinement on Phase 2 logic from user:
-                        // "Check if the symbol is imported... for each import... if import.alias matches receiver... search symbol in target"
-                        // What if `from a import b`?
-                        // Alias is `b` (effectively). Target is `a`?
-                        // Implementation detail:
-                        // If `from a import b`, `namespace`="a", `alias`="b"?
-                        // If `QueryAdapter` sets `alias`="b" for that specific symbol import?
-                        // Adapater logic: 
-                        // `name` (the imported symbol) is extracted. `alias` is extracted.
-                        // `result.scope_graph.add_import(..., symbols: vec![name])`.
-                        
-                        // I need to fix `main.rs` to flatten `symbols` into multiple DB import rows?
-                        // OR just handle the explicit module imports for now.
-                        
-                        // Let's implement module-alias matching first.
-                        if let Some(ref alias) = import.alias {
-                            if alias == &ref_item.name { matches_import = true; }
-                        }
-                    }
-
-                    if matches_import {
-                        let target = &import.target_namespace;
-                        // Search for symbol in that namespace
-                         let namespace_matches = self.store.find_symbols_by_name_and_container_pattern(&ref_item.name, target)?;
-                         
-                         if namespace_matches.len() == 1 {
-                             matched_uri = Some(namespace_matches[0].uri.clone());
-                         } else if namespace_matches.len() > 1 {
-                             for sym in namespace_matches { candidates.insert(sym.uri); }
-                         }
+                    match self.try_resolve_import(&ref_item, &import)? {
+                        Some(uri) => { matched_uri = Some(uri); break; },
+                        None => { /* continue checking other imports */ }
                     }
                 }
             }
 
             // --- Step 3: Global Resolution ---
-             if matched_uri.is_none() && candidates.is_empty() {
+            if matched_uri.is_none() && candidates.is_empty() {
                  let global_matches = self.store.find_symbols_by_name(&ref_item.name)?;
                  
                  // If we have a receiver (e.g., Type in Type::method), try to filter global matches by that parent
@@ -171,11 +91,6 @@ impl<'a> GlobalLinker<'a> {
                      let mut filtered_candidates = Vec::new();
                      for method_sym in &global_matches {
                          // We need to check if method_sym is a child of any receiver_match
-                         // Since we don't have "parent" pointer in Symbol, we check "Contains" edges FROM receiver TO method
-                         // But that might be slow to do for all.
-                         // Optimization: Check path? 
-                         // Or: Check if method_sym has an incoming "Contains" edge from one of the receiver_matches.
-                         
                          let incoming = self.store.get_edges_to(&method_sym.uri)?;
                          let incoming_contains = incoming.iter().filter(|e| e.kind == EdgeKind::Contains);
                          for edge in incoming_contains {
@@ -238,5 +153,35 @@ impl<'a> GlobalLinker<'a> {
         }
 
         Ok(GlobalLinkerStats { resolved, ambiguous, external, total })
+    }
+
+    fn try_resolve_import(&self, ref_item: &crate::storage::PersistedUnresolvedReference, import: &crate::storage::Import) -> Result<Option<SymbolUri>> {
+        let mut matches_import = false;
+        
+        if let Some(ref recv) = ref_item.receiver {
+            if let Some(ref alias) = import.alias {
+                if alias == recv { matches_import = true; }
+            } else {
+                let namespace_leaf = import.target_namespace.split('.').last().unwrap_or(&import.target_namespace);
+                if namespace_leaf == recv { matches_import = true; }
+            }
+        } else {
+            // No receiver. e.g. "sqrt(2)".
+            // Let's implement module-alias matching first.
+            if let Some(ref alias) = import.alias {
+                if alias == &ref_item.name { matches_import = true; }
+            }
+        }
+
+        if matches_import {
+            let target = &import.target_namespace;
+            // Search for symbol in that namespace
+             let namespace_matches = self.store.find_symbols_by_name_and_container_pattern(&ref_item.name, target)?;
+             
+             if namespace_matches.len() == 1 {
+                 return Ok(Some(namespace_matches[0].uri.clone()));
+             }
+        }
+        Ok(None)
     }
 }
