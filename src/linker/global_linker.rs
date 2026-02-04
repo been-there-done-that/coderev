@@ -4,6 +4,7 @@ use crate::edge::{Edge, EdgeKind};
 use crate::uri::SymbolUri;
 use std::collections::HashSet;
 use std::fmt;
+use crate::ui::{ProgressMessage, ProgressPhase};
 
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct GlobalLinkerStats {
@@ -25,15 +26,28 @@ impl fmt::Display for GlobalLinkerStats {
 
 pub struct GlobalLinker<'a> {
     store: &'a SqliteStore,
+    progress_tx: Option<crossbeam::channel::Sender<ProgressMessage>>,
 }
 
 impl<'a> GlobalLinker<'a> {
     pub fn new(store: &'a SqliteStore) -> Self {
-        Self { store }
+        Self { 
+            store,
+            progress_tx: None,
+        }
+    }
+
+    pub fn with_progress(mut self, tx: crossbeam::channel::Sender<ProgressMessage>) -> Self {
+        self.progress_tx = Some(tx);
+        self
     }
 
     pub fn run(&self) -> Result<GlobalLinkerStats> {
         let unresolved = self.store.get_all_unresolved()?;
+        let total = unresolved.len();
+        if let Some(ref tx) = self.progress_tx {
+            tx.send(ProgressMessage::Started { phase: ProgressPhase::Linking, total }).ok();
+        }
         self.resolve_references(unresolved)
     }
 
@@ -48,9 +62,18 @@ impl<'a> GlobalLinker<'a> {
         let mut ambiguous = 0;
         let mut external = 0;
 
+        let mut i = 0;
         for ref_item in unresolved {
-            // Check if it's already resolved in a previous run (though get_all_unresolved should prevent this if we delete/mark)
-            // We'll proceed assuming we are processing fresh items.
+            i += 1;
+            if i % 100 == 0 {
+                if let Some(ref tx) = self.progress_tx {
+                    tx.send(ProgressMessage::Progress {
+                        phase: ProgressPhase::Linking,
+                        current: i,
+                        file: None,
+                    }).ok();
+                }
+            }
 
             let mut candidates = HashSet::new(); 
             let mut matched_uri = None;

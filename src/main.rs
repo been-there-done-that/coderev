@@ -3,8 +3,8 @@
 use clap::{Parser, Subcommand};
 use serde::Serialize;
 use std::path::PathBuf;
-use coderev::ui::{Icons, header, success, info, section, phase, timing, summary_row};
-use coderev::ui::{file_deleted, ProgressManager};
+use coderev::ui::{Icons, header, success, info, section, phase};
+use coderev::ui::ProgressManager;
 use coderev::ui::progress_message::{ProgressMessage, ProgressPhase};
 use coderev::adapter;
 use coderev::query::QueryEngine;
@@ -898,6 +898,7 @@ async fn run(cli: Cli, output_mode: OutputMode) -> anyhow::Result<()> {
                 coderev::ui::status(Icons::DATABASE, "Database", &database.display().to_string());
             }
 
+            let skip_exts = ["png", "jpg", "jpeg", "gif", "ico", "exe", "dll", "so", "o", "a", "lib", "bin", "pdf", "zip", "tar", "gz", "wasm", "node", "db", "sqlite", "lock", "pyc", "svg"];
             let total_files = ignore::WalkBuilder::new(&path)
                 .standard_filters(true)
                 .add_custom_ignore_filename(".cursorignore")
@@ -905,8 +906,8 @@ async fn run(cli: Cli, output_mode: OutputMode) -> anyhow::Result<()> {
                 .filter_map(|e| e.ok())
                 .filter(|e| e.file_type().map(|ft| ft.is_file()).unwrap_or(false))
                 .filter(|e| {
-                    let ext = e.path().extension().and_then(|s| s.to_str()).unwrap_or("");
-                    !["png", "jpg", "jpeg", "gif", "ico", "exe", "dll", "so", "o", "a", "lib", "bin", "pdf", "zip", "tar", "gz", "wasm", "node", "db", "sqlite", "lock", "pyc", "svg"].contains(&ext)
+                    let ext = e.path().extension().and_then(|s| s.to_str()).unwrap_or("").to_lowercase();
+                    !skip_exts.contains(&ext.as_str())
                 })
                 .count();
 
@@ -1036,7 +1037,10 @@ async fn run(cli: Cli, output_mode: OutputMode) -> anyhow::Result<()> {
                     Box::new(move |result| {
                         let entry = match result {
                             Ok(e) => e,
-                            Err(_) => return ignore::WalkState::Continue,
+                            Err(_) => {
+                                progress_tx.send(ProgressMessage::Progress { phase: ProgressPhase::Parsing, current: 0, file: None }).ok();
+                                return ignore::WalkState::Continue;
+                            }
                         };
 
                         if !entry.file_type().map(|ft| ft.is_file()).unwrap_or(false) {
@@ -1046,14 +1050,17 @@ async fn run(cli: Cli, output_mode: OutputMode) -> anyhow::Result<()> {
                         let file_path = entry.path();
                         let ext = file_path.extension().and_then(|s| s.to_str()).unwrap_or("").to_lowercase();
 
-                        let skip_exts = ["png", "jpg", "jpeg", "gif", "ico", "exe", "dll", "so", "o", "a", "lib", "bin", "pdf", "zip", "tar", "gz", "wasm", "node", "db", "sqlite", "lock", "pyc", "svg"];
                         if skip_exts.contains(&ext.as_str()) {
+                            progress_tx.send(ProgressMessage::Progress { phase: ProgressPhase::Parsing, current: 0, file: None }).ok();
                             return ignore::WalkState::Continue;
                         }
 
                         let content = match std::fs::read_to_string(file_path) {
                             Ok(c) => c,
-                            Err(_) => return ignore::WalkState::Continue,
+                            Err(_) => {
+                                progress_tx.send(ProgressMessage::Progress { phase: ProgressPhase::Parsing, current: 0, file: None }).ok();
+                                return ignore::WalkState::Continue;
+                            },
                         };
 
                         let hash = blake3::hash(content.as_bytes()).to_string();
@@ -1115,9 +1122,6 @@ async fn run(cli: Cli, output_mode: OutputMode) -> anyhow::Result<()> {
                 let db_paths = store.get_all_indexed_files().unwrap_or_default();
                 for db_path in db_paths {
                     if !seen_paths.contains(&db_path) {
-                        if output_mode.is_human() {
-                            file_deleted(&db_path);
-                        }
                         store.delete_file_data(&db_path).ok();
                         stats.deleted += 1;
                     }
@@ -1125,30 +1129,21 @@ async fn run(cli: Cli, output_mode: OutputMode) -> anyhow::Result<()> {
             });
 
             progress_tx.send(ProgressMessage::Finished { phase: ProgressPhase::Parsing }).ok();
-
-            if output_mode.is_human() {
-                section("Indexing Summary");
-                summary_row("Unchanged", &stats.unchanged.to_string());
-                summary_row("Added", &stats.added.to_string());
-                summary_row("Modified", &stats.modified.to_string());
-                summary_row("Deleted", &stats.deleted.to_string());
-                summary_row("Errors", &stats.errors.to_string());
-                timing(&format!("{:?}", start_indexing.elapsed()));
-            }
+            let parsing_ms = Some(start_indexing.elapsed().as_millis());
 
             // Phase 2: Linking
             let something_changed = stats.added > 0 || stats.modified > 0 || stats.deleted > 0;
             let unresolved_count = store.count_unresolved()?;
 
+            progress_tx.send(ProgressMessage::Started { phase: ProgressPhase::Linking, total: unresolved_count }).ok();
             if something_changed || unresolved_count > 0 {
-                progress_tx.send(ProgressMessage::Started { phase: ProgressPhase::Linking, total: unresolved_count }).ok();
 
                 let start_linking = std::time::Instant::now();
-                let linker = coderev::linker::GlobalLinker::new(&store);
+                let linker = coderev::linker::GlobalLinker::new(&store)
+                    .with_progress(progress_tx.clone());
                 let stats = linker.run()?;
                 linker_stats = Some(stats.clone());
                 linking_ms = Some(start_linking.elapsed().as_millis());
-
                 progress_tx.send(ProgressMessage::Finished { phase: ProgressPhase::Linking }).ok();
 
                 // Phase 3: Embeddings
@@ -1180,7 +1175,6 @@ async fn run(cli: Cli, output_mode: OutputMode) -> anyhow::Result<()> {
                         }).ok();
                     }
                     embedding_ms = Some(start_embeddings.elapsed().as_millis());
-
                     progress_tx.send(ProgressMessage::Finished { phase: ProgressPhase::Embedding }).ok();
                 }
 
@@ -1196,34 +1190,67 @@ async fn run(cli: Cli, output_mode: OutputMode) -> anyhow::Result<()> {
                 semantic_ms = Some(start_semantic.elapsed().as_millis());
 
                 progress_tx.send(ProgressMessage::Finished { phase: ProgressPhase::Semantic }).ok();
+            } else {
+                // Ensure UI knows we checked these
+                progress_tx.send(ProgressMessage::Started { phase: ProgressPhase::Embedding, total: 0 }).ok();
+                progress_tx.send(ProgressMessage::Finished { phase: ProgressPhase::Embedding }).ok();
+                progress_tx.send(ProgressMessage::Started { phase: ProgressPhase::Semantic, total: 0 }).ok();
+                progress_tx.send(ProgressMessage::Finished { phase: ProgressPhase::Semantic }).ok();
             }
             // Drop progress manager BEFORE showing final stats
             progress_tx.send(ProgressMessage::Exit).ok();
             drop(progress_manager);
 
             // Show final stats
-            let final_stats = store.stats()?;
+            let final_stats = store.stats().unwrap_or_default();
             if output_mode.is_human() {
-                // Formatting for the summary
-                section("Indexing Summary");
-                println!("  Unchanged {}", stats.unchanged);
-                println!("  Added {}", stats.added);
-                println!("  Modified {}", stats.modified);
-                println!("  Deleted {}", stats.deleted);
-                println!("  Errors {}", stats.errors);
+                println!();
+                section("Indexing Report");
+                
+                let mut table = coderev::ui::table::TableBuilder::new();
+                
+                table.add_row("Files (Parsed/Skipped)", &format!("{}", total_files));
+                table.add_row("  ✨ Added", &format!("{}", stats.added));
+                table.add_row("  📝 Modified", &format!("{}", stats.modified));
+                table.add_row("  🗑️ Deleted", &format!("{}", stats.deleted));
+                
+                if let Some(ms) = parsing_ms {
+                    table.add_row("⏱️ Parsing", &format!("{:?}", std::time::Duration::from_millis(ms as u64)));
+                }
 
                 if let Some(ref s) = linker_stats {
-                    println!("\n{}", s);
-                }
-                
-                if let Some(ref s) = semantic_stats {
-                    if s.resolved > 0 {
-                        println!("\n✅ Resolved {} symbols via semantic resolution", s.resolved);
+                    table.add_row("Symbols (Linked)", &format!("{}", s.total));
+                    table.add_row("  ✅ Resolved", &format!("{}", s.resolved));
+                    table.add_row("  🌍 External", &format!("{}", s.external));
+                    if let Some(ms) = linking_ms {
+                        table.add_row("⏱️ Linking", &format!("{:?}", std::time::Duration::from_millis(ms as u64)));
                     }
                 }
 
-                println!("\n{}", final_stats);
-                timing(&format!("Total: {:?}", total_start.elapsed()));
+                if embedded_symbols > 0 {
+                    table.add_row("Embeddings Generated", &format!("{}", embedded_symbols));
+                    if let Some(ms) = embedding_ms {
+                        table.add_row("⏱️ Embedding", &format!("{:?}", std::time::Duration::from_millis(ms as u64)));
+                    }
+                }
+
+                if let Some(ref s) = semantic_stats {
+                    table.add_row("Semantic Resolution", &format!("{}", s.total));
+                    table.add_row("  🧠 Resolved", &format!("{}", s.resolved));
+                    if let Some(ms) = semantic_ms {
+                        table.add_row("⏱️ Semantic", &format!("{:?}", std::time::Duration::from_millis(ms as u64)));
+                    }
+                }
+
+                let final_stats = store.stats().unwrap_or_default();
+                table.add_row("Database Total", "");
+                table.add_row("  🔖 Symbols", &format!("{}", final_stats.symbols));
+                table.add_row("  🔗 Edges", &format!("{}", final_stats.edges));
+                
+                table.add_row("━━━━━━━━━━━━━━━━━━━━", "━━━━━━━━━━");
+                table.add_row("🚀 Total Duration", &format!("{:?}", total_start.elapsed()));
+                
+                println!("{}", table.build());
             }
 
             if output_mode.is_machine() {
@@ -1244,7 +1271,7 @@ async fn run(cli: Cli, output_mode: OutputMode) -> anyhow::Result<()> {
                         linker: linker_stats,
                         embedded_symbols,
                         semantic: semantic_stats,
-                        final_db: final_stats,
+                        final_db: final_stats.clone(),
                         durations,
                     };
                     emit_success(output_mode, "index", data)?;
@@ -1257,7 +1284,7 @@ async fn run(cli: Cli, output_mode: OutputMode) -> anyhow::Result<()> {
                         l: linker_stats,
                         es: embedded_symbols,
                         se: semantic_stats,
-                        fd: final_stats,
+                        fd: final_stats.clone(),
                         t: durations,
                     };
                     emit_success(output_mode, "index", data)?;

@@ -67,24 +67,25 @@ impl ProgressManager {
                             ProgressPhase::Semantic => 4,
                         };
                         
-                        pb_clone.set_prefix(format!("Phase {}:", phase_idx));
-                        pb_clone.set_message(match phase {
+                        let phase_name = match phase {
                             ProgressPhase::Parsing => "Parsing Files",
                             ProgressPhase::Linking => "Linking Symbols",
                             ProgressPhase::Embedding => "Generating Embeddings",
                             ProgressPhase::Semantic => "Semantic Analysis",
-                        });
+                        };
+
+                        pb_clone.set_prefix(format!("Phase {}:", phase_idx));
+                        pb_clone.set_message(phase_name);
                         pb_clone.set_length(total as u64);
                         pb_clone.set_position(0);
                         
-                        // Clear status lines on phase start
+                        // Reset status lines immediately
                         for line in &status_lines {
                             line.set_message("");
                         }
                     }
                     ProgressMessage::Progress { phase, current, file } => {
                         if phase == current_phase {
-                            // If current is provided (like in Semantic), use it. Otherwise increment.
                             if current > 0 {
                                 processed_count = current;
                             } else {
@@ -98,11 +99,6 @@ impl ProgressManager {
                                     active_files.remove(0);
                                 }
                             }
-
-                            // Update 3 status lines
-                            // Line 2: ├─ [Icon] [File/Status 1]
-                            // Line 3: ├─ [Icon] [File/Status 2]
-                            // Line 4: └─ 🔄 [N] files remaining...
 
                             let icon = match current_phase {
                                 ProgressPhase::Parsing => Icons::NEW,
@@ -127,20 +123,26 @@ impl ProgressManager {
                             if total_count > processed_count {
                                 let remaining = total_count - processed_count;
                                 status_lines[2].set_message(format!(
-                                    " {} {} {} files remaining...",
+                                    " {} {} {} items remaining...",
                                     Icons::TREE_END.style(theme().dim.clone()),
                                     "🔄".style(theme().info.clone()),
                                     remaining.style(theme().dim.clone())
                                 ));
-                            } else if total_count > 0 {
+                            } else {
                                 status_lines[2].set_message(format!(
-                                    " {} {} phase almost complete...",
+                                    " {} {} completing phase...",
                                     Icons::TREE_END.style(theme().dim.clone()),
                                     Icons::CHECK.style(theme().success.clone())
                                 ));
-                            } else {
-                                status_lines[2].set_message("");
                             }
+                        }
+                    }
+                    ProgressMessage::Finished { phase: _ } => {
+                        // Force 100% completion in UI
+                        let len = pb_clone.length().unwrap_or(0);
+                        pb_clone.set_position(len);
+                        for line in &status_lines {
+                            line.set_message("");
                         }
                     }
                     ProgressMessage::Exit => {
@@ -150,7 +152,7 @@ impl ProgressManager {
                 }
             }
             
-            // Cleanup: Finish all to clear them from screen
+            // Cleanup: Finish all to clear them if dropped
             for line in status_lines {
                 line.finish_and_clear();
             }

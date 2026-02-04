@@ -1013,7 +1013,7 @@ pub struct AmbiguousReference {
 
 
 /// Database statistics
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Default)]
 pub struct DbStats {
     pub symbols: usize,
     pub edges: usize,
