@@ -919,7 +919,10 @@ async fn run(cli: Cli, output_mode: OutputMode) -> anyhow::Result<()> {
             };
 
             if output_mode.is_human() {
-                phase("Parsing Files");
+                progress_tx.send(ProgressMessage::Started {
+                    phase: ProgressPhase::Parsing,
+                    total: total_files,
+                }).ok();
             }
 
             // Channel for worker-to-coordinator communication
@@ -1146,10 +1149,6 @@ async fn run(cli: Cli, output_mode: OutputMode) -> anyhow::Result<()> {
             if something_changed || unresolved_count > 0 {
                 progress_tx.send(ProgressMessage::Started { phase: ProgressPhase::Linking, total: unresolved_count }).ok();
 
-                if output_mode.is_human() {
-                    phase("Linking Symbols");
-                    info("Unresolved", &unresolved_count.to_string());
-                }
                 let start_linking = std::time::Instant::now();
                 let linker = coderev::linker::GlobalLinker::new(&store);
                 let stats = linker.run()?;
@@ -1173,10 +1172,6 @@ async fn run(cli: Cli, output_mode: OutputMode) -> anyhow::Result<()> {
                     embedded_symbols = symbols_to_embed.len();
                     progress_tx.send(ProgressMessage::Started { phase: ProgressPhase::Embedding, total: symbols_to_embed.len() }).ok();
 
-                    if output_mode.is_human() {
-                        phase("Generating Embeddings");
-                        info("Symbols", &symbols_to_embed.len().to_string());
-                    }
                     let start_embeddings = std::time::Instant::now();
                     let batch_size = 64;
                     let mut processed = 0;
@@ -1193,10 +1188,6 @@ async fn run(cli: Cli, output_mode: OutputMode) -> anyhow::Result<()> {
                             current: processed,
                             file: None,
                         }).ok();
-                        if output_mode.is_human() {
-                            print!("\r   Progress: {}/{} symbols", processed, symbols_to_embed.len());
-                            std::io::stdout().flush().ok();
-                        }
                     }
                     embedding_ms = Some(start_embeddings.elapsed().as_millis());
                     if output_mode.is_human() {
@@ -1211,9 +1202,6 @@ async fn run(cli: Cli, output_mode: OutputMode) -> anyhow::Result<()> {
                 // Reuse the same engine (no model reload!)
                 progress_tx.send(ProgressMessage::Started { phase: ProgressPhase::Semantic, total: 0 }).ok();
 
-                if output_mode.is_human() {
-                    phase("Semantic Resolution");
-                }
                 let start_semantic = std::time::Instant::now();
                 let semantic_linker = coderev::linker::SemanticLinker::new(&store, &engine);
                 let stats = semantic_linker.run()?;
@@ -1278,6 +1266,7 @@ async fn run(cli: Cli, output_mode: OutputMode) -> anyhow::Result<()> {
                     emit_success(output_mode, "index", data)?;
                 }
             }
+            progress_tx.send(ProgressMessage::Exit).ok();
         }
 
         Commands::Search { query, database, limit, kind, exact } => {

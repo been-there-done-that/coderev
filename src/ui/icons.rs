@@ -36,4 +36,7 @@ impl Icons {
     pub const SQUARE: &str = "🔲";
     pub const CIRCLE: &str = "🔵";
     pub const STAR: &str = "⭐";
+    pub const TREE_BRANCH: &str = "├─";
+    pub const TREE_END: &str = "└─";
+    pub const TREE_VERTICAL: &str = "│";
 }
