@@ -26,6 +26,14 @@ impl QueryResult {
     }
 }
 
+/// Semantic analysis result for a symbol
+#[derive(Debug, serde::Serialize, serde::Deserialize)]
+pub struct AnalysisResult {
+    pub summary: String,
+    pub importance: f32,
+    pub module_role: String,
+}
+
 /// Query engine for code intelligence operations
 pub struct QueryEngine<'a> {
     store: &'a SqliteStore,
@@ -177,6 +185,44 @@ impl<'a> QueryEngine<'a> {
     /// Find symbols contained by a container (e.g., methods in a class)
     pub fn find_members(&self, container_uri: &SymbolUri) -> Result<Vec<Symbol>> {
         self.traverse_edges(container_uri, EdgeKind::Contains, TraversalDirection::Outgoing, 1)
+    }
+
+    /// Analyze a symbol to provide semantic insights
+    pub fn analyze_symbol(&self, uri: &SymbolUri) -> Result<AnalysisResult> {
+        let symbol = self.store.get_symbol(uri)?
+            .ok_or_else(|| crate::Error::InvalidUri(format!("Symbol not found: {}", uri)))?;
+        
+        let incoming = self.store.get_edges_to(uri)?;
+        let outgoing = self.store.get_edges_from(uri)?;
+        
+        let importance = (incoming.len() as f32 * 0.5 + 1.0).min(10.0);
+        
+        let role = match symbol.kind {
+            SymbolKind::Namespace => "Component/Module",
+            SymbolKind::Container => "Data Structure/Type",
+            SymbolKind::Callable => {
+                if incoming.is_empty() && !outgoing.is_empty() {
+                    "Entry Point/High-level Logic"
+                } else if !incoming.is_empty() && outgoing.is_empty() {
+                    "Utility/Leaf Function"
+                } else {
+                    "Intermediate Logic"
+                }
+            },
+            SymbolKind::Value => "State/Constant",
+            SymbolKind::Document => "Documentation/Data",
+        };
+
+        let summary = format!(
+            "{} '{}' in {}. It has {} incoming dependencies and interacts with {} other symbols.",
+            role, symbol.name, symbol.path, incoming.len(), outgoing.len()
+        );
+
+        Ok(AnalysisResult {
+            summary,
+            importance,
+            module_role: role.to_string(),
+        })
     }
 
     /// Find the container of a symbol (e.g., class that contains a method)

@@ -1,10 +1,11 @@
 //! Symbol types - Universal Intermediate Representation (UIR)
 //!
-//! All languages are mapped into four universal symbol types:
+//! All languages are mapped into five universal symbol types:
 //! - `Namespace`: File, module, package
 //! - `Container`: Class, struct, trait, object
 //! - `Callable`: Function, method, constructor, macro
 //! - `Value`: Field, variable, constant
+//! - `Document`: Chunked text document (for non-AST files)
 
 use crate::{Error, Result};
 use crate::uri::SymbolUri;
@@ -26,6 +27,8 @@ pub enum SymbolKind {
     Callable,
     /// Field, variable, constant - data holders
     Value,
+    /// Chunked text document - for non-AST files (SQL, YAML, Markdown)
+    Document,
 }
 
 impl SymbolKind {
@@ -36,6 +39,7 @@ impl SymbolKind {
             SymbolKind::Container => "container",
             SymbolKind::Callable => "callable",
             SymbolKind::Value => "value",
+            SymbolKind::Document => "document",
         }
     }
 
@@ -46,6 +50,7 @@ impl SymbolKind {
             SymbolKind::Container,
             SymbolKind::Callable,
             SymbolKind::Value,
+            SymbolKind::Document,
         ]
     }
 }
@@ -59,6 +64,7 @@ impl FromStr for SymbolKind {
             "container" | "class" | "struct" | "trait" | "interface" => Ok(SymbolKind::Container),
             "callable" | "function" | "method" | "fn" | "def" => Ok(SymbolKind::Callable),
             "value" | "field" | "variable" | "var" | "const" | "let" => Ok(SymbolKind::Value),
+            "document" | "doc" | "chunk" | "text" => Ok(SymbolKind::Document),
             _ => Err(Error::InvalidUri(format!("Unknown symbol kind: {}", s))),
         }
     }

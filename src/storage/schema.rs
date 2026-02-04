@@ -23,15 +23,87 @@ CREATE TABLE IF NOT EXISTS edges (
     to_uri TEXT NOT NULL,
     kind TEXT NOT NULL,
     confidence REAL NOT NULL DEFAULT 1.0,
+    resolution_mode TEXT NOT NULL DEFAULT 'static',
     UNIQUE(from_uri, to_uri, kind)
 )
 "#;
 
+
 /// SQL to create the embeddings table
 pub const CREATE_EMBEDDINGS_TABLE: &str = r#"
 CREATE TABLE IF NOT EXISTS embeddings (
-    uri TEXT PRIMARY KEY,
-    vector BLOB NOT NULL
+    uri TEXT NOT NULL,
+    id INTEGER NOT NULL DEFAULT 0,
+    vector BLOB NOT NULL,
+    PRIMARY KEY (uri, id)
+)
+"#;
+
+/// SQL to create the unresolved_references table
+/// Stores call sites and references that need global resolution
+pub const CREATE_UNRESOLVED_REFERENCES_TABLE: &str = r#"
+CREATE TABLE IF NOT EXISTS unresolved_references (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    from_uri TEXT NOT NULL,
+    name TEXT NOT NULL,
+    receiver TEXT,
+    scope_id INTEGER NOT NULL,
+    file_path TEXT NOT NULL,
+    line INTEGER NOT NULL,
+    ref_kind TEXT NOT NULL DEFAULT 'call',
+    is_external BOOLEAN NOT NULL DEFAULT 0
+)
+"#;
+
+/// SQL to create the imports table
+pub const CREATE_IMPORTS_TABLE: &str = r#"
+CREATE TABLE IF NOT EXISTS imports (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    file_path TEXT NOT NULL,
+    alias TEXT,
+    target_namespace TEXT NOT NULL,
+    line INTEGER
+)
+"#;
+
+/// SQL to create the ambiguous_references table
+pub const CREATE_AMBIGUOUS_REFERENCES_TABLE: &str = r#"
+CREATE TABLE IF NOT EXISTS ambiguous_references (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    reference_id INTEGER NOT NULL,
+    candidate_uri TEXT NOT NULL,
+    score REAL DEFAULT 0.0,
+    FOREIGN KEY(reference_id) REFERENCES unresolved_references(id) ON DELETE CASCADE
+)
+"#;
+
+/// SQL to create the callsite_embeddings table
+pub const CREATE_CALLSITE_EMBEDDINGS_TABLE: &str = r#"
+CREATE TABLE IF NOT EXISTS callsite_embeddings (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    reference_id INTEGER NOT NULL,
+    vector BLOB NOT NULL,
+    FOREIGN KEY(reference_id) REFERENCES unresolved_references(id) ON DELETE CASCADE
+)
+"#;
+
+
+/// SQL to create the file_hash table
+pub const CREATE_FILE_HASH_TABLE: &str = r#"
+CREATE TABLE IF NOT EXISTS file_hash (
+    path TEXT PRIMARY KEY,
+    hash TEXT NOT NULL,
+    last_modified INTEGER NOT NULL
+)
+"#;
+
+/// SQL to create the symbol_hash table
+pub const CREATE_SYMBOL_HASH_TABLE: &str = r#"
+CREATE TABLE IF NOT EXISTS symbol_hash (
+    symbol_uri TEXT PRIMARY KEY,
+    hash TEXT NOT NULL,
+    embedding_version INTEGER NOT NULL DEFAULT 0,
+    FOREIGN KEY(symbol_uri) REFERENCES symbols(uri) ON DELETE CASCADE
 )
 "#;
 
@@ -43,6 +115,19 @@ pub const CREATE_INDEXES: &[&str] = &[
     "CREATE INDEX IF NOT EXISTS idx_edges_from ON edges(from_uri)",
     "CREATE INDEX IF NOT EXISTS idx_edges_to ON edges(to_uri)",
     "CREATE INDEX IF NOT EXISTS idx_edges_kind ON edges(kind)",
+    "CREATE INDEX IF NOT EXISTS idx_unresolved_name ON unresolved_references(name)",
+    "CREATE INDEX IF NOT EXISTS idx_unresolved_file ON unresolved_references(file_path)",
+    "CREATE INDEX IF NOT EXISTS idx_imports_file ON imports(file_path)",
+    "CREATE INDEX IF NOT EXISTS idx_ambiguous_ref ON ambiguous_references(reference_id)",
+];
+
+/// SQLite performance pragmas for faster indexing and queries
+pub const PERFORMANCE_PRAGMAS: &[&str] = &[
+    "PRAGMA journal_mode=WAL",      // Write-Ahead Logging for better concurrency
+    "PRAGMA synchronous=NORMAL",     // Faster than FULL, still safe
+    "PRAGMA cache_size=-64000",      // 64MB cache (negative = KB)
+    "PRAGMA mmap_size=268435456",    // 256MB memory-mapped I/O
+    "PRAGMA temp_store=MEMORY",      // Store temp tables in memory
 ];
 
 /// All schema creation statements
@@ -51,7 +136,15 @@ pub fn all_schema_statements() -> Vec<&'static str> {
         CREATE_SYMBOLS_TABLE,
         CREATE_EDGES_TABLE,
         CREATE_EMBEDDINGS_TABLE,
+        CREATE_UNRESOLVED_REFERENCES_TABLE,
+        CREATE_IMPORTS_TABLE,
+        CREATE_AMBIGUOUS_REFERENCES_TABLE,
+        CREATE_CALLSITE_EMBEDDINGS_TABLE,
+        CREATE_FILE_HASH_TABLE,
+        CREATE_SYMBOL_HASH_TABLE,
     ];
+
+
     stmts.extend(CREATE_INDEXES.iter().copied());
     stmts
 }

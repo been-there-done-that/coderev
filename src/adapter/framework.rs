@@ -114,20 +114,43 @@ impl AdapterRegistry {
     }
 }
 
-/// Create a default registry with all built-in adapters
+/// Create a default registry with all built-in adapters (using QueryAdapter)
 pub fn default_registry() -> AdapterRegistry {
     let mut registry = AdapterRegistry::new();
-    registry.register(super::python::PythonAdapter::new());
-    registry.register(super::javascript::JavaScriptAdapter::new());
+    
+    // Use query-based adapters for all languages
+    if let Ok(adapter) = super::query_adapter::QueryAdapter::python() {
+        registry.register(adapter);
+    }
+    if let Ok(adapter) = super::query_adapter::QueryAdapter::javascript() {
+        registry.register(adapter);
+    }
+    match super::query_adapter::QueryAdapter::rust() {
+        Ok(adapter) => registry.register(adapter),
+        Err(e) => {
+            if !crate::output::is_quiet() {
+                eprintln!("❌ Failed to register Rust adapter: {}", e);
+            }
+        }
+    }
+    match super::query_adapter::QueryAdapter::go() {
+        Ok(adapter) => registry.register(adapter),
+        Err(e) => {
+            if !crate::output::is_quiet() {
+                eprintln!("❌ Failed to register Go adapter: {}", e);
+            }
+        }
+    }
+    
     registry
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::path::PathBuf;
 
     struct TestAdapter;
+
     
     impl LanguageAdapter for TestAdapter {
         fn language_name(&self) -> &str { "test" }

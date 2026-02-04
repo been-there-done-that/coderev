@@ -17,6 +17,14 @@ pub mod scope;
 pub mod storage;
 pub mod adapter;
 pub mod query;
+pub mod linker;
+pub mod server;
+pub mod watcher;
+pub mod ignore;
+pub mod output;
+pub mod config;
+pub mod ui;
+
 
 // Re-exports for convenient access
 pub use uri::SymbolUri;
@@ -48,4 +56,24 @@ pub enum Error {
 
     #[error("Symbol not found: {0}")]
     SymbolNotFound(String),
+}
+
+/// Message sent from parallel indexer workers to the coordinator
+#[derive(Debug)]
+pub enum IndexMessage {
+    Processed {
+        relative_path: String,
+        hash: String,
+        result: Option<crate::adapter::AdapterResult>,
+        status: FileStatus,
+    },
+    Error(String, String),
+}
+
+/// Status of a file during indexing
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FileStatus {
+    New,
+    Modified,
+    Unchanged,
 }

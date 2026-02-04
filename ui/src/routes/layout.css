@@ -1,0 +1,58 @@
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap');
+
+@import 'tailwindcss';
+@plugin '@tailwindcss/forms';
+@plugin '@tailwindcss/typography';
+
+@theme {
+  --color-brand-primary: #6366f1;
+  --color-brand-secondary: #ec4899;
+  --color-surface-bg: #0f172a;
+  --color-surface-card: #1e293b;
+  --color-text-primary: #f8fafc;
+  --color-text-secondary: #94a3b8;
+  
+  --font-sans: 'Inter', system-ui, -apple-system, sans-serif;
+  --font-mono: 'JetBrains Mono', monospace;
+}
+
+@layer base {
+  body {
+    @apply bg-surface-bg text-text-primary font-sans antialiased;
+    margin: 0;
+  }
+  
+  /* Smooth scrollbars */
+  ::-webkit-scrollbar {
+    width: 6px;
+    height: 6px;
+  }
+  ::-webkit-scrollbar-track {
+    @apply bg-transparent;
+  }
+  ::-webkit-scrollbar-thumb {
+    @apply bg-text-secondary/20 rounded-full hover:bg-text-secondary/40 transition-colors;
+  }
+}
+
+.glass {
+  @apply bg-surface-card/70 backdrop-blur-md border border-white/10;
+}
+
+.glass-dark {
+  @apply bg-black/40 backdrop-blur-xl border border-white/5;
+}
+
+.gradient-text {
+  @apply bg-gradient-to-r from-brand-primary to-brand-secondary bg-clip-text text-transparent;
+}
+
+@keyframes glow {
+  0%, 100% { opacity: 0.5; filter: blur(20px); }
+  50% { opacity: 0.8; filter: blur(30px); }
+}
+
+.glow-bg {
+  @apply absolute -z-10 pointer-events-none;
+  animation: glow 10s infinite;
+}
