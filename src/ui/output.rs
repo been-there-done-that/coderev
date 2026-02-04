@@ -84,10 +84,10 @@ pub fn banner(title: &str, subtitle: &str) {
     println!("  {}", format!("┌{}┐", line).style(theme().dim.clone()));
     
     let title_line = center_text(title, width - 4);
-    println!("  {} {} {}", "│".style(theme().dim.clone()), title_line.style(theme().header.clone()).bold(), "│".style(theme().dim.clone()));
+    println!("  {}{}{}", "│".style(theme().dim.clone()), title_line, "│".style(theme().dim.clone()));
     
     let subtitle_line = center_text(subtitle, width - 4);
-    println!("  {} {} {}", "│".style(theme().dim.clone()), subtitle_line.style(theme().dim.clone()), "│".style(theme().dim.clone()));
+    println!("  {}{}{}", "│".style(theme().dim.clone()), subtitle_line, "│".style(theme().dim.clone()));
     
     println!("  {}", format!("└{}┘", line).style(theme().dim.clone()));
     println!();
@@ -101,7 +101,7 @@ fn center_text(text: &str, width: usize) -> String {
     }
     let left = (width - text_len) / 2;
     let right = width - text_len - left;
-    format!("{}{}{}", " ".repeat(left), text, " ".repeat(right))
+    format!(" {} ", format!("{}{}{}", " ".repeat(left), text, " ".repeat(right)))
 }
 
 pub fn human_bytes(bytes: u64) -> String {

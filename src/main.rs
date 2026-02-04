@@ -931,8 +931,8 @@ async fn run(cli: Cli, output_mode: OutputMode) -> anyhow::Result<()> {
 
             if output_mode.is_human() {
                 banner(
-                    &format!("{} INDEXING {}", Icons::ROCKET, repo_name.to_uppercase()),
-                    &format!("{} {}", Icons::DATABASE, database.display())
+                    &format!("{}", "CODEGREP".style(coderev::ui::theme().info.clone()).bold()),
+                    &format!("Indexing {} into {}", repo_name.style(coderev::ui::theme().info.clone()), database.file_name().unwrap_or_default().to_string_lossy().style(coderev::ui::theme().dim.clone()))
                 );
                 if force {
                     println!("{} Database reset forced.", Icons::DEL.style(coderev::ui::theme().warn.clone()));
