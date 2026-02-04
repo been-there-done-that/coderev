@@ -4,7 +4,7 @@ use clap::{Parser, Subcommand};
 use owo_colors::OwoColorize;
 use serde::Serialize;
 use std::path::PathBuf;
-use coderev::ui::{Icons, header, success, info, section, phase};
+use coderev::ui::{Icons, success, info, section, phase, banner};
 use coderev::ui::ProgressManager;
 use coderev::ui::progress_message::{ProgressMessage, ProgressPhase};
 use coderev::adapter;
@@ -930,14 +930,15 @@ async fn run(cli: Cli, output_mode: OutputMode) -> anyhow::Result<()> {
             let mut stats = IndexingStats::default();
 
             if output_mode.is_human() {
-                let rel_path = path.strip_prefix(std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."))).unwrap_or(&path);
-                header(&format!("Indexing {}", repo_name));
-                coderev::ui::status(Icons::DATABASE, "Database", &database.display().to_string());
-                let rel_path_str = rel_path.display().to_string();
-                let path_display = if rel_path_str.is_empty() { "." } else { &rel_path_str };
-                println!("📄 Path: {}", path_display.style(coderev::ui::theme().info.clone()));
+                banner(
+                    &format!("{} INDEXING {}", Icons::ROCKET, repo_name.to_uppercase()),
+                    &format!("{} {}", Icons::DATABASE, database.display())
+                );
                 if force {
                     println!("{} Database reset forced.", Icons::DEL.style(coderev::ui::theme().warn.clone()));
+                    println!();
+                    // Give the filesystem a moment to sync the deletion before reopening
+                    std::thread::sleep(std::time::Duration::from_millis(100));
                 }
             }
 

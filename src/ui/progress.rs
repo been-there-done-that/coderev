@@ -33,23 +33,20 @@ impl ProgressManager {
             .progress_chars("█▌░"),
         );
 
-        // 2. Pre-allocate 3 status lines (Lines 2, 3, 4) to prevent flickering/jumping
-        let mut status_lines = Vec::with_capacity(3);
-        for i in 0..3 {
-            let line = mp.add(ProgressBar::new_spinner());
-            if i == 2 {
-                line.set_style(indicatif::ProgressStyle::with_template("{spinner:.cyan/blue} {msg}").unwrap());
-                if console::Term::stdout().is_term() {
-                    line.enable_steady_tick(Duration::from_millis(100));
-                }
-            } else {
-                line.set_style(indicatif::ProgressStyle::with_template("{msg}").unwrap());
-            }
-            if !console::Term::stdout().is_term() {
-                line.set_draw_target(indicatif::ProgressDrawTarget::hidden());
-            }
-            status_lines.push(line);
+        // 2. One clean status line (template set to empty initially)
+        let status_line = mp.add(ProgressBar::new_spinner());
+        status_line.set_style(
+            indicatif::ProgressStyle::with_template("{msg}")
+                .unwrap(),
+        );
+        if console::Term::stdout().is_term() {
+            status_line.enable_steady_tick(Duration::from_millis(100));
+        } else {
+            status_line.set_draw_target(indicatif::ProgressDrawTarget::hidden());
         }
+
+        let mut status_lines = Vec::with_capacity(1);
+        status_lines.push(status_line);
 
         let pb_clone = pb.clone();
 
@@ -88,6 +85,7 @@ impl ProgressManager {
                         
                         // Reset status lines immediately
                         for line in &status_lines {
+                            line.set_style(indicatif::ProgressStyle::with_template("{msg}").unwrap());
                             line.set_message("");
                         }
                     }
@@ -114,32 +112,26 @@ impl ProgressManager {
                                 ProgressPhase::Semantic => Icons::BOLT,
                             };
 
-                            for i in 0..2 {
-                                if i < active_files.len() {
-                                    status_lines[i].set_message(format!(
-                                        " {} {} {}",
-                                        Icons::TREE_BRANCH.style(theme().dim.clone()),
-                                        icon.style(theme().info.clone()),
-                                        active_files[i].style(theme().muted.clone())
-                                    ));
-                                } else {
-                                    status_lines[i].set_message("");
-                                }
-                            }
+                            let file_info = if let Some(last_file) = active_files.last() {
+                                format!("{} {} • ", icon.style(theme().info.clone()), last_file.style(theme().muted.clone()))
+                            } else {
+                                "".to_string()
+                            };
 
                             if total_count > processed_count {
                                 let remaining = total_count - processed_count;
-                                status_lines[2].set_message(format!(
-                                    " {} {} items remaining...",
-                                    Icons::TREE_END.style(theme().dim.clone()),
+                                status_lines[0].set_style(
+                                    indicatif::ProgressStyle::with_template("  └─ {spinner:.cyan/blue} {msg}")
+                                        .unwrap(),
+                                );
+                                status_lines[0].set_message(format!(
+                                    "{}{} items remaining...",
+                                    file_info,
                                     remaining.style(theme().dim.clone())
                                 ));
                             } else {
-                                status_lines[2].set_message(format!(
-                                    " {} {} completing phase...",
-                                    Icons::TREE_END.style(theme().dim.clone()),
-                                    Icons::CHECK.style(theme().success.clone())
-                                ));
+                                status_lines[0].set_style(indicatif::ProgressStyle::with_template("{msg}").unwrap());
+                                status_lines[0].set_message("  └─ completing phase...".to_string());
                             }
                         }
                     }
@@ -148,6 +140,7 @@ impl ProgressManager {
                         let len = pb_clone.length().unwrap_or(0);
                         pb_clone.set_position(len);
                         for line in &status_lines {
+                            line.set_style(indicatif::ProgressStyle::with_template("{msg}").unwrap());
                             line.set_message("");
                         }
                     }

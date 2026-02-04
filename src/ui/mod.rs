@@ -8,7 +8,7 @@ pub mod theme;
 pub use icons::Icons;
 pub use output::{
     dim, error, file_deleted, file_modified, file_new, file_unchanged, header, info, muted, phase,
-    section, status, success, summary_row, timing, warn, human_bytes,
+    section, status, success, summary_row, timing, warn, human_bytes, banner,
 };
 pub use crate::output::is_quiet;
 pub use progress::{ProgressManager, Spinner};
