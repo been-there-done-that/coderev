@@ -1131,14 +1131,17 @@ async fn run(cli: Cli, output_mode: OutputMode) -> anyhow::Result<()> {
                 // Phase 3: Embeddings
                 // Only for new symbols
                 let symbols_to_embed = store.find_symbols_without_embeddings()?;
+                
+                // Create embedding engine ONCE and reuse for phase 3 and 4
+                let engine = coderev::query::EmbeddingEngine::new()?;
+                
                 if !symbols_to_embed.is_empty() {
                     embedded_symbols = symbols_to_embed.len();
                     if output_mode.is_human() {
                         println!("\n🧠 Phase 3: Generating Embeddings ({} new symbols)...", symbols_to_embed.len());
                     }
                     let start_embeddings = std::time::Instant::now();
-                    let engine = coderev::query::EmbeddingEngine::new()?;
-                    let batch_size = 32;
+                    let batch_size = 64; // Increased from 32 for better throughput
                     let mut processed = 0;
                     for chunk in symbols_to_embed.chunks(batch_size) {
                         let embeddings = engine.embed_symbols(chunk)?;
@@ -1161,12 +1164,11 @@ async fn run(cli: Cli, output_mode: OutputMode) -> anyhow::Result<()> {
                 }
 
                 // Phase 4: Semantic Resolution
-                // Again, only if needed.
+                // Reuse the same engine (no model reload!)
                 if output_mode.is_human() {
                     println!("\n🧠 Phase 4: Running Semantic Resolver...");
                 }
                 let start_semantic = std::time::Instant::now();
-                let engine = coderev::query::EmbeddingEngine::new()?;
                 let semantic_linker = coderev::linker::SemanticLinker::new(&store, &engine);
                 let stats = semantic_linker.run()?;
                 semantic_stats = Some(stats.clone());

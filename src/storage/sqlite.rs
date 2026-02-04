@@ -48,6 +48,10 @@ impl SqliteStore {
         for stmt in schema::all_schema_statements() {
             conn.execute(stmt, [])?;
         }
+        // Apply performance pragmas after schema init
+        for pragma in schema::PERFORMANCE_PRAGMAS {
+            conn.execute(pragma, []).ok(); // Ignore errors (some pragmas may not apply)
+        }
         Ok(())
     }
 

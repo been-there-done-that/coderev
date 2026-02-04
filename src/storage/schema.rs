@@ -119,6 +119,15 @@ pub const CREATE_INDEXES: &[&str] = &[
     "CREATE INDEX IF NOT EXISTS idx_ambiguous_ref ON ambiguous_references(reference_id)",
 ];
 
+/// SQLite performance pragmas for faster indexing and queries
+pub const PERFORMANCE_PRAGMAS: &[&str] = &[
+    "PRAGMA journal_mode=WAL",      // Write-Ahead Logging for better concurrency
+    "PRAGMA synchronous=NORMAL",     // Faster than FULL, still safe
+    "PRAGMA cache_size=-64000",      // 64MB cache (negative = KB)
+    "PRAGMA mmap_size=268435456",    // 256MB memory-mapped I/O
+    "PRAGMA temp_store=MEMORY",      // Store temp tables in memory
+];
+
 /// All schema creation statements
 pub fn all_schema_statements() -> Vec<&'static str> {
     let mut stmts = vec![
