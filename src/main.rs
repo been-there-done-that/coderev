@@ -4,7 +4,7 @@ use clap::{Parser, Subcommand};
 use serde::Serialize;
 use std::path::PathBuf;
 use coderev::ui::{Icons, header, success, info, section, phase, timing, summary_row};
-use coderev::ui::{file_modified, file_new, file_deleted, ProgressManager};
+use coderev::ui::{file_deleted, ProgressManager};
 use coderev::ui::progress_message::{ProgressMessage, ProgressPhase};
 use coderev::adapter;
 use coderev::query::QueryEngine;
@@ -910,7 +910,7 @@ async fn run(cli: Cli, output_mode: OutputMode) -> anyhow::Result<()> {
                 })
                 .count();
 
-            let (_progress_manager, progress_tx) = if output_mode.is_human() {
+            let (progress_manager, progress_tx) = if output_mode.is_human() {
                 ProgressManager::new(total_files)
             } else {
                 let (manager, tx) = ProgressManager::new(0);
@@ -967,16 +967,10 @@ async fn run(cli: Cli, output_mode: OutputMode) -> anyhow::Result<()> {
                                         stats.unchanged += 1;
                                     }
                                     FileStatus::Modified => {
-                                        if output_mode.is_human() {
-                                            file_modified(&relative_path);
-                                        }
                                         store.delete_file_data(&relative_path).ok();
                                         stats.modified += 1;
                                     }
                                     FileStatus::New => {
-                                        if output_mode.is_human() {
-                                            file_new(&relative_path);
-                                        }
                                         stats.added += 1;
                                     }
                                 }
@@ -1154,10 +1148,6 @@ async fn run(cli: Cli, output_mode: OutputMode) -> anyhow::Result<()> {
                 let stats = linker.run()?;
                 linker_stats = Some(stats.clone());
                 linking_ms = Some(start_linking.elapsed().as_millis());
-                if output_mode.is_human() {
-                    println!("{}", stats);
-                    timing(&format!("{:?}", start_linking.elapsed()));
-                }
 
                 progress_tx.send(ProgressMessage::Finished { phase: ProgressPhase::Linking }).ok();
 
@@ -1190,10 +1180,6 @@ async fn run(cli: Cli, output_mode: OutputMode) -> anyhow::Result<()> {
                         }).ok();
                     }
                     embedding_ms = Some(start_embeddings.elapsed().as_millis());
-                    if output_mode.is_human() {
-                        println!();
-                        timing(&format!("{:?}", start_embeddings.elapsed()));
-                    }
 
                     progress_tx.send(ProgressMessage::Finished { phase: ProgressPhase::Embedding }).ok();
                 }
@@ -1203,29 +1189,40 @@ async fn run(cli: Cli, output_mode: OutputMode) -> anyhow::Result<()> {
                 progress_tx.send(ProgressMessage::Started { phase: ProgressPhase::Semantic, total: 0 }).ok();
 
                 let start_semantic = std::time::Instant::now();
-                let semantic_linker = coderev::linker::SemanticLinker::new(&store, &engine);
+                let semantic_linker = coderev::linker::SemanticLinker::new(&store, &engine)
+                    .with_progress(progress_tx.clone());
                 let stats = semantic_linker.run()?;
                 semantic_stats = Some(stats.clone());
                 semantic_ms = Some(start_semantic.elapsed().as_millis());
-                if output_mode.is_human() {
-                    if stats.resolved > 0 {
-                        success(&format!("Resolved {} symbols", stats.resolved));
-                    }
-                    timing(&format!("{:?}", start_semantic.elapsed()));
-                }
 
                 progress_tx.send(ProgressMessage::Finished { phase: ProgressPhase::Semantic }).ok();
-            } else {
-                if output_mode.is_human() {
-                    info("Status", "Repository is up to date");
-                }
             }
+            // Drop progress manager BEFORE showing final stats
+            progress_tx.send(ProgressMessage::Exit).ok();
+            drop(progress_manager);
 
             // Show final stats
             let final_stats = store.stats()?;
             if output_mode.is_human() {
-                println!();
-                println!("{}", final_stats);
+                // Formatting for the summary
+                section("Indexing Summary");
+                println!("  Unchanged {}", stats.unchanged);
+                println!("  Added {}", stats.added);
+                println!("  Modified {}", stats.modified);
+                println!("  Deleted {}", stats.deleted);
+                println!("  Errors {}", stats.errors);
+
+                if let Some(ref s) = linker_stats {
+                    println!("\n{}", s);
+                }
+                
+                if let Some(ref s) = semantic_stats {
+                    if s.resolved > 0 {
+                        println!("\n✅ Resolved {} symbols via semantic resolution", s.resolved);
+                    }
+                }
+
+                println!("\n{}", final_stats);
                 timing(&format!("Total: {:?}", total_start.elapsed()));
             }
 

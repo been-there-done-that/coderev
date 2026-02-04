@@ -3,8 +3,6 @@ use crate::storage::sqlite::{SqliteStore, PersistedUnresolvedReference};
 use crate::query::embedding::EmbeddingEngine;
 use crate::edge::{Edge, EdgeKind};
 use crate::uri::SymbolUri;
-use crate::output;
-use std::io::Write;
 
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct SemanticLinkerStats {
@@ -13,10 +11,14 @@ pub struct SemanticLinkerStats {
     pub total: usize,
 }
 
+use crate::ui::ProgressMessage;
+use crate::ui::ProgressPhase;
+
 pub struct SemanticLinker<'a> {
     store: &'a SqliteStore,
     embedding_engine: &'a EmbeddingEngine,
     threshold: f32,
+    progress_tx: Option<crossbeam::channel::Sender<ProgressMessage>>,
 }
 
 impl<'a> SemanticLinker<'a> {
@@ -25,7 +27,13 @@ impl<'a> SemanticLinker<'a> {
             store,
             embedding_engine,
             threshold: 0.6, // Default threshold lowered for practical recall
+            progress_tx: None,
         }
+    }
+
+    pub fn with_progress(mut self, tx: crossbeam::channel::Sender<ProgressMessage>) -> Self {
+        self.progress_tx = Some(tx);
+        self
     }
 
     pub fn with_threshold(mut self, threshold: f32) -> Self {
@@ -49,9 +57,6 @@ impl<'a> SemanticLinker<'a> {
         }
 
         // Phase 1: Cache ALL symbol embeddings in memory
-        if !output::is_quiet() {
-            println!("   Caching symbol embeddings...");
-        }
         let symbol_embeddings = self.store.get_all_embeddings()?;
         let cached_symbols: Vec<(SymbolUri, Vec<f32>)> = symbol_embeddings.into_iter()
             .filter_map(|(uri_str, vec)| {
@@ -64,10 +69,8 @@ impl<'a> SemanticLinker<'a> {
         let mut processed = 0;
         let total_targets = targets.len();
         
-        if !output::is_quiet() {
-            println!("   Processing {} semantic candidates...", total_targets);
-            print!("   Progress: 0 / {}", total_targets);
-            std::io::stdout().flush().ok();
+        if let Some(ref tx) = self.progress_tx {
+            tx.send(ProgressMessage::Started { phase: ProgressPhase::Semantic, total: total_targets }).ok();
         }
 
         for chunk in targets.chunks(batch_size) {
@@ -139,15 +142,15 @@ impl<'a> SemanticLinker<'a> {
             }
             self.store.commit()?;
             
-            if !output::is_quiet() {
-                print!("\r   Progress: {} / {} ({} resolved)", processed, total_targets, resolved);
-                std::io::stdout().flush().ok();
+            if let Some(ref tx) = self.progress_tx {
+                tx.send(ProgressMessage::Progress { 
+                    phase: ProgressPhase::Semantic, 
+                    current: processed, 
+                    file: None 
+                }).ok();
             }
         }
 
-        if !output::is_quiet() {
-            println!("\n✅ Semantic Resolver complete.");
-        }
         Ok(SemanticLinkerStats { resolved, candidates: candidates_count, total })
     }
     

@@ -8,7 +8,6 @@ use std::time::Duration;
 
 pub struct ProgressManager {
     mp: MultiProgress,
-    pb: ProgressBar,
     _handle: thread::JoinHandle<()>,
 }
 
@@ -18,7 +17,7 @@ impl ProgressManager {
 
         let mp = MultiProgress::new();
         
-        // Main progress bar for the current phase
+        // 1. Phased Progress Bar (Line 1)
         let pb = mp.add(ProgressBar::new(total_files as u64));
         let pb = if console::Term::stdout().is_term() {
             pb
@@ -26,7 +25,6 @@ impl ProgressManager {
             ProgressBar::hidden()
         };
 
-        // Template for the phase line: "Phase X: [Name] [███...] 82%"
         pb.set_style(
             indicatif::ProgressStyle::with_template(
                 "{prefix} {msg} [{bar:20.cyan/blue}] {percent}%"
@@ -35,8 +33,18 @@ impl ProgressManager {
             .progress_chars("█▌░"),
         );
 
+        // 2. Pre-allocate 3 status lines (Lines 2, 3, 4) to prevent flickering/jumping
+        let mut status_lines = Vec::with_capacity(3);
+        for _ in 0..3 {
+            let line = mp.add(ProgressBar::new_spinner());
+            line.set_style(indicatif::ProgressStyle::with_template("{msg}").unwrap());
+            if !console::Term::stdout().is_term() {
+                line.set_draw_target(indicatif::ProgressDrawTarget::hidden());
+            }
+            status_lines.push(line);
+        }
+
         let pb_clone = pb.clone();
-        let mp_clone = mp.clone();
 
         let handle = thread::spawn(move || {
             let mut active_files: Vec<String> = Vec::new();
@@ -44,14 +52,13 @@ impl ProgressManager {
             let mut total_count = total_files;
             let mut processed_count = 0;
 
-            // Lines for active files
-            let mut file_bars: Vec<ProgressBar> = Vec::new();
-
             for msg in rx {
                 match msg {
                     ProgressMessage::Started { phase, total } => {
                         current_phase = phase;
                         total_count = total;
+                        processed_count = 0;
+                        active_files.clear();
                         
                         let phase_idx = match phase {
                             ProgressPhase::Parsing => 1,
@@ -69,78 +76,70 @@ impl ProgressManager {
                         });
                         pb_clone.set_length(total as u64);
                         pb_clone.set_position(0);
-                        processed_count = 0;
-                        active_files.clear();
                         
-                        // Clear old file bars
-                        for bar in file_bars.drain(..) {
-                            bar.finish_and_clear();
+                        // Clear status lines on phase start
+                        for line in &status_lines {
+                            line.set_message("");
                         }
                     }
-                    ProgressMessage::Progress { phase, current: _, file } => {
+                    ProgressMessage::Progress { phase, current, file } => {
                         if phase == current_phase {
-                            processed_count += 1;
+                            // If current is provided (like in Semantic), use it. Otherwise increment.
+                            if current > 0 {
+                                processed_count = current;
+                            } else {
+                                processed_count += 1;
+                            }
                             pb_clone.set_position(processed_count as u64);
                             
                             if let Some(f) = file {
                                 active_files.push(f);
-                                if active_files.len() > 3 {
+                                if active_files.len() > 2 {
                                     active_files.remove(0);
                                 }
+                            }
 
-                                // Update file lines
-                                // For simplicity in this implementation, we'll recreate the bars if needed
-                                // or just update existing ones. indicatif's MultiProgress can be tricky 
-                                // with dynamic additions. We'll use a simpler approach of just setting messages.
-                                
-                                while file_bars.len() < active_files.len() {
-                                    let new_bar = mp_clone.add(ProgressBar::new_spinner());
-                                    new_bar.set_style(indicatif::ProgressStyle::with_template("{msg}").unwrap());
-                                    file_bars.push(new_bar);
-                                }
+                            // Update 3 status lines
+                            // Line 2: ├─ [Icon] [File/Status 1]
+                            // Line 3: ├─ [Icon] [File/Status 2]
+                            // Line 4: └─ 🔄 [N] files remaining...
 
-                                for (i, f_path) in active_files.iter().enumerate() {
-                                    let is_last = i == active_files.len() - 1;
-                                    let prefix = if is_last { Icons::TREE_END } else { Icons::TREE_BRANCH };
-                                    let icon = match current_phase {
-                                        ProgressPhase::Parsing => Icons::NEW,
-                                        ProgressPhase::Linking => Icons::LINK,
-                                        ProgressPhase::Embedding => Icons::BRAIN,
-                                        _ => Icons::SPARKLE,
-                                    };
-                                    
-                                    file_bars[i].set_message(format!(
+                            let icon = match current_phase {
+                                ProgressPhase::Parsing => Icons::NEW,
+                                ProgressPhase::Linking => Icons::LINK,
+                                ProgressPhase::Embedding => Icons::BRAIN,
+                                ProgressPhase::Semantic => Icons::BOLT,
+                            };
+
+                            for i in 0..2 {
+                                if i < active_files.len() {
+                                    status_lines[i].set_message(format!(
                                         " {} {} {}",
-                                        prefix.style(theme().dim.clone()),
+                                        Icons::TREE_BRANCH.style(theme().dim.clone()),
                                         icon.style(theme().info.clone()),
-                                        f_path.style(theme().muted.clone())
+                                        active_files[i].style(theme().muted.clone())
                                     ));
+                                } else {
+                                    status_lines[i].set_message("");
                                 }
-                                
-                                // If we have remaining files, show the count on the last line
-                                if total_count > processed_count {
-                                    let remaining = total_count - processed_count;
-                                    if let Some(_last_bar) = file_bars.last() {
-                                        // If we have 3 files already, replace the last one's message to include remaining?
-                                        // Actually, let's keep 2 files and 1 remaining line as per the user's mockup.
-                                        if active_files.len() >= 3 {
-                                             let f_path = &active_files[active_files.len()-2];
-                                             file_bars[active_files.len()-2].set_message(format!(
-                                                " {} {} {}",
-                                                Icons::TREE_BRANCH.style(theme().dim.clone()),
-                                                Icons::MOD.style(theme().warn.clone()), // Use MOD for variety like mockup
-                                                f_path.style(theme().muted.clone())
-                                            ));
-                                            
-                                            file_bars.last().unwrap().set_message(format!(
-                                                " {} {} {} files remaining...",
-                                                Icons::TREE_END.style(theme().dim.clone()),
-                                                "🔄".style(theme().info.clone()),
-                                                remaining.style(theme().dim.clone())
-                                            ));
-                                        }
-                                    }
-                                }
+                            }
+
+                            if total_count > processed_count {
+                                let remaining = total_count - processed_count;
+                                status_lines[2].set_message(format!(
+                                    " {} {} {} files remaining...",
+                                    Icons::TREE_END.style(theme().dim.clone()),
+                                    "🔄".style(theme().info.clone()),
+                                    remaining.style(theme().dim.clone())
+                                ));
+                            } else if total_count > 0 {
+                                status_lines[2].set_message(format!(
+                                    " {} {} phase almost complete...",
+                                    Icons::TREE_END.style(theme().dim.clone()),
+                                    Icons::CHECK.style(theme().success.clone())
+                                ));
+                            } else {
+                                status_lines[2].set_message("");
                             }
                         }
                     }
@@ -151,9 +150,9 @@ impl ProgressManager {
                 }
             }
             
-            // Cleanup
-            for bar in file_bars {
-                bar.finish_and_clear();
+            // Cleanup: Finish all to clear them from screen
+            for line in status_lines {
+                line.finish_and_clear();
             }
             pb_clone.finish_and_clear();
         });
@@ -161,7 +160,6 @@ impl ProgressManager {
         (
             Self {
                 mp,
-                pb,
                 _handle: handle,
             },
             tx,
