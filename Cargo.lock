@@ -472,6 +472,44 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c3e64b0cc0439b12df2fa678eae89a1c56a529fd067a9115f7827f1fffd22b32"
 
 [[package]]
+name = "coderev"
+version = "0.0.1"
+dependencies = [
+ "anyhow",
+ "async-trait",
+ "axum",
+ "blake3",
+ "clap",
+ "console",
+ "crossbeam",
+ "fastembed",
+ "glob",
+ "ignore",
+ "indicatif",
+ "libc",
+ "mcp-sdk-rs",
+ "notify",
+ "owo-colors",
+ "regex",
+ "rusqlite",
+ "serde",
+ "serde_json",
+ "tabled",
+ "tempfile",
+ "thiserror 2.0.18",
+ "tokio",
+ "toml",
+ "tower-http",
+ "tracing",
+ "tracing-subscriber",
+ "tree-sitter",
+ "tree-sitter-go",
+ "tree-sitter-javascript",
+ "tree-sitter-python",
+ "tree-sitter-rust",
+]
+
+[[package]]
 name = "color_quant"
 version = "1.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3523,44 +3561,6 @@ name = "typenum"
 version = "1.19.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "562d481066bde0658276a35467c4af00bdc6ee726305698a55b86e61d7ad82bb"
-
-[[package]]
-name = "coderev"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "async-trait",
- "axum",
- "blake3",
- "clap",
- "console",
- "crossbeam",
- "fastembed",
- "glob",
- "ignore",
- "indicatif",
- "libc",
- "mcp-sdk-rs",
- "notify",
- "owo-colors",
- "regex",
- "rusqlite",
- "serde",
- "serde_json",
- "tabled",
- "tempfile",
- "thiserror 2.0.18",
- "tokio",
- "toml",
- "tower-http",
- "tracing",
- "tracing-subscriber",
- "tree-sitter",
- "tree-sitter-go",
- "tree-sitter-javascript",
- "tree-sitter-python",
- "tree-sitter-rust",
-]
 
 [[package]]
 name = "unicase"
