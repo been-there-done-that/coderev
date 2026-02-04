@@ -1,6 +1,7 @@
 //! Coderev CLI - Command-line interface for Universal Code Intelligence Substrate
 
 use clap::{Parser, Subcommand};
+use owo_colors::OwoColorize;
 use serde::Serialize;
 use std::path::PathBuf;
 use coderev::ui::{Icons, header, success, info, section, phase};
@@ -430,6 +431,10 @@ enum Commands {
         /// Repository name (defaults to directory name)
         #[arg(short, long)]
         repo: Option<String>,
+
+        /// Overwrite existing database
+        #[arg(long)]
+        force: bool,
     },
 
     /// Search for symbols using natural language
@@ -812,6 +817,8 @@ async fn run(cli: Cli, output_mode: OutputMode) -> anyhow::Result<()> {
                 database: Some(db.display().to_string()),
                 repo: Some(repo_name),
                 path: Some(target_path.display().to_string()),
+                include: None,
+                exclude: None,
             };
 
             let cfg_path = config_path
@@ -880,10 +887,23 @@ async fn run(cli: Cli, output_mode: OutputMode) -> anyhow::Result<()> {
                 emit_success(output_mode, "agent-setup", data)?;
             }
         }
-        Commands::Index { path, database, repo } => {
+        Commands::Index {
+            path,
+            database: db_cli,
+            repo,
+            force,
+        } => {
             let total_start = std::time::Instant::now();
-            let path = resolve_path(path, &cfg_opt)?;
+            let path = resolve_path(path.clone(), &cfg_opt)?;
             let cfg_path = global_config_path.clone().unwrap_or_else(|| config::default_config_path_in(&path));
+            
+            if force {
+                let db_to_remove = resolve_database(db_cli.clone(), &cfg_opt);
+                if db_to_remove.exists() {
+                    std::fs::remove_file(&db_to_remove).ok();
+                }
+            }
+
             if cfg_opt.is_none() && !cfg_path.exists() {
                 let db_path = config::default_database_path_in(&path);
                 let auto_cfg = CoderevConfig {
@@ -895,12 +915,14 @@ async fn run(cli: Cli, output_mode: OutputMode) -> anyhow::Result<()> {
                             .unwrap_or_else(|| "unknown".to_string())
                     })),
                     path: Some(path.display().to_string()),
+                    include: None,
+                    exclude: None,
                 };
                 config::ensure_db_dir(&db_path)?;
                 config::ensure_gitignore(&path)?;
                 config::write_config(&cfg_path, &auto_cfg, false)?;
             }
-            let database = resolve_database_ready(database, &cfg_opt)?;
+            let database = resolve_database_ready(db_cli, &cfg_opt)?;
             tracing::info!("Indexing {} into {:?}", path.display(), database);
             let repo_name = resolve_repo(repo, &cfg_opt, &path);
             
@@ -908,9 +930,15 @@ async fn run(cli: Cli, output_mode: OutputMode) -> anyhow::Result<()> {
             let mut stats = IndexingStats::default();
 
             if output_mode.is_human() {
+                let rel_path = path.strip_prefix(std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."))).unwrap_or(&path);
                 header(&format!("Indexing {}", repo_name));
-                coderev::ui::status(Icons::FILE, "Path", &path.display().to_string());
                 coderev::ui::status(Icons::DATABASE, "Database", &database.display().to_string());
+                let rel_path_str = rel_path.display().to_string();
+                let path_display = if rel_path_str.is_empty() { "." } else { &rel_path_str };
+                println!("📄 Path: {}", path_display.style(coderev::ui::theme().info.clone()));
+                if force {
+                    println!("{} Database reset forced.", Icons::DEL.style(coderev::ui::theme().warn.clone()));
+                }
             }
 
             let skip_exts = ["png", "jpg", "jpeg", "gif", "ico", "exe", "dll", "so", "o", "a", "lib", "bin", "pdf", "zip", "tar", "gz", "wasm", "node", "db", "sqlite", "lock", "pyc", "svg"];
@@ -921,8 +949,17 @@ async fn run(cli: Cli, output_mode: OutputMode) -> anyhow::Result<()> {
                 .filter_map(|e| e.ok())
                 .filter(|e| e.file_type().map(|ft| ft.is_file()).unwrap_or(false))
                 .filter(|e| {
-                    let ext = e.path().extension().and_then(|s| s.to_str()).unwrap_or("").to_lowercase();
-                    !skip_exts.contains(&ext.as_str())
+                    let p = e.path();
+                    let ext = p.extension().and_then(|s| s.to_str()).unwrap_or("").to_lowercase();
+                    if skip_exts.contains(&ext.as_str()) {
+                        return false;
+                    }
+                    if let Some(cfg) = &cfg_opt {
+                        if cfg.should_skip(p, &path) {
+                            return false;
+                        }
+                    }
+                    true
                 })
                 .count();
 
@@ -1944,7 +1981,7 @@ async fn run(cli: Cli, output_mode: OutputMode) -> anyhow::Result<()> {
             }
 
             let store = SqliteStore::open(&database)?;
-            let watcher = coderev::watcher::Watcher::new(watch_path.clone(), store);
+            let watcher = coderev::watcher::Watcher::new(watch_path.clone(), store, cfg_opt.clone());
 
             if output_mode.is_machine() && !daemon {
                 if matches!(output_mode, OutputMode::Json) {

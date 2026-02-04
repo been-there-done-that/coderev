@@ -10,6 +10,60 @@ pub struct CoderevConfig {
     pub exclude: Option<Vec<String>>,
 }
 
+impl CoderevConfig {
+    pub fn should_skip(&self, path: &Path, root: &Path) -> bool {
+        let relative_path = path.strip_prefix(root).unwrap_or(path);
+        let path_str = relative_path.to_string_lossy();
+
+        if let Some(exclude) = &self.exclude {
+            for pattern in exclude {
+                // Try as regex if it looks like one (e.g. /pattern/)
+                if pattern.starts_with('/') && pattern.ends_with('/') && pattern.len() > 2 {
+                    let re_str = &pattern[1..pattern.len()-1];
+                    if let Ok(re) = regex::Regex::new(re_str) {
+                        if re.is_match(&path_str) {
+                            return true;
+                        }
+                    }
+                }
+                
+                if let Ok(glob) = glob::Pattern::new(pattern) {
+                    if glob.matches(&path_str) {
+                        return true;
+                    }
+                }
+            }
+        }
+
+        if let Some(include) = &self.include {
+            let mut matched = false;
+            for pattern in include {
+                if pattern.starts_with('/') && pattern.ends_with('/') && pattern.len() > 2 {
+                    let re_str = &pattern[1..pattern.len()-1];
+                    if let Ok(re) = regex::Regex::new(re_str) {
+                        if re.is_match(&path_str) {
+                            matched = true;
+                            break;
+                        }
+                    }
+                }
+
+                if let Ok(glob) = glob::Pattern::new(pattern) {
+                    if glob.matches(&path_str) {
+                        matched = true;
+                        break;
+                    }
+                }
+            }
+            if !matched {
+                return true;
+            }
+        }
+
+        false
+    }
+}
+
 pub fn default_config_path() -> PathBuf {
     PathBuf::from(".coderev").join("coderev.toml")
 }

@@ -35,9 +35,16 @@ impl ProgressManager {
 
         // 2. Pre-allocate 3 status lines (Lines 2, 3, 4) to prevent flickering/jumping
         let mut status_lines = Vec::with_capacity(3);
-        for _ in 0..3 {
+        for i in 0..3 {
             let line = mp.add(ProgressBar::new_spinner());
-            line.set_style(indicatif::ProgressStyle::with_template("{msg}").unwrap());
+            if i == 2 {
+                line.set_style(indicatif::ProgressStyle::with_template("{spinner:.cyan/blue} {msg}").unwrap());
+                if console::Term::stdout().is_term() {
+                    line.enable_steady_tick(Duration::from_millis(100));
+                }
+            } else {
+                line.set_style(indicatif::ProgressStyle::with_template("{msg}").unwrap());
+            }
             if !console::Term::stdout().is_term() {
                 line.set_draw_target(indicatif::ProgressDrawTarget::hidden());
             }
@@ -123,9 +130,8 @@ impl ProgressManager {
                             if total_count > processed_count {
                                 let remaining = total_count - processed_count;
                                 status_lines[2].set_message(format!(
-                                    " {} {} {} items remaining...",
+                                    " {} {} items remaining...",
                                     Icons::TREE_END.style(theme().dim.clone()),
-                                    "🔄".style(theme().info.clone()),
                                     remaining.style(theme().dim.clone())
                                 ));
                             } else {
