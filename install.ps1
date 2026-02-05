@@ -7,14 +7,33 @@ if ([string]::IsNullOrWhiteSpace($prefix)) {
 $binDir = Join-Path $prefix "bin"
 $binName = "coderev.exe"
 
-if (-not (Get-Command cargo -ErrorAction SilentlyContinue)) {
-  Write-Error "cargo is required (install Rust)"
-  exit 1
+# Get Latest Version from GitHub API
+$release = Invoke-RestMethod -Uri "https://api.github.com/repos/been-there-done-that/coderev/releases/latest"
+$version = $release.tag_name
+
+if (-not $version) {
+    Write-Error "Could not find latest release version"
+    exit 1
 }
 
-New-Item -ItemType Directory -Force -Path $binDir | Out-Null
+$assetName = "coderev-x86_64-pc-windows-msvc.exe"
+$downloadUrl = "https://github.com/been-there-done-that/coderev/releases/download/$version/$assetName"
 
-cargo build --release
-Copy-Item -Force "target\release\$binName" "$binDir\$binName"
+Write-Host "Downloading $binName $version..."
+$tmpDir = [System.IO.Path]::GetTempPath()
+$tmpFile = Join-Path $tmpDir $assetName
 
-Write-Host "Installed $binName to $binDir\$binName"
+try {
+    Invoke-WebRequest -Uri $downloadUrl -OutFile $tmpFile -ErrorAction Stop
+} catch {
+    Write-Error "Failed to download $downloadUrl"
+    exit 1
+}
+
+if (-not (Test-Path $binDir)) {
+    New-Item -ItemType Directory -Force -Path $binDir | Out-Null
+}
+
+Copy-Item -Force $tmpFile (Join-Path $binDir $binName)
+
+Write-Host "Successfully installed $binName to $binDir\$binName"
