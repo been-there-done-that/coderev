@@ -48,8 +48,9 @@ jobs:
       - name: Prepare Asset (Unix)
         if: runner.os != 'Windows'
         run: |
-          mv target/${{ matrix.target }}/release/${{ matrix.binary_name }} ${{ matrix.asset_name }}
-          tar -czf ${{ matrix.asset_name }}.tar.gz ${{ matrix.asset_name }}
+          # Keep the binary name as 'coderev' inside the tarball for Homebrew
+          cp target/${{ matrix.target }}/release/${{ matrix.binary_name }} .
+          tar -czf ${{ matrix.asset_name }}.tar.gz ${{ matrix.binary_name }}
 
       - name: Prepare Asset (Windows)
         if: runner.os == 'Windows'
