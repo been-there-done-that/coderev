@@ -14,6 +14,8 @@ use coderev::{SymbolKind, IndexMessage, FileStatus};
 use coderev::config::{self, CoderevConfig};
 use tracing_subscriber::{fmt, prelude::*, EnvFilter};
 
+mod commands;
+
 
 #[derive(Parser)]
 #[command(name = "coderev")]
@@ -590,6 +592,12 @@ enum Commands {
     /// Trace calls (alias for callers/callees)
     #[command(subcommand)]
     Trace(TraceCommands),
+
+    /// Print version information
+    Version,
+
+    /// Check for updates
+    Update,
 }
 
 #[derive(Subcommand)]
@@ -654,6 +662,8 @@ fn command_name(command: &Commands) -> &'static str {
             TraceCommands::Callers { .. } => "trace.callers",
             TraceCommands::Callees { .. } => "trace.callees",
         },
+        Commands::Version => "version",
+        Commands::Update => "update",
     }
 }
 
@@ -1599,7 +1609,7 @@ async fn run(cli: Cli, output_mode: OutputMode) -> anyhow::Result<()> {
             let callees = engine.find_callees(&target_uri, depth)?;
             
             if output_mode.is_human() {
-                println!("📱 Finding callees for: {} (depth: {})...", uri, depth);
+                println!("📞 Finding callees for: {} (depth: {})...", uri, depth);
                 if callees.is_empty() {
                     println!("∅ No callees found.");
                 } else {
@@ -1622,6 +1632,14 @@ async fn run(cli: Cli, output_mode: OutputMode) -> anyhow::Result<()> {
                 };
                 emit_success(output_mode, "callees", data)?;
             }
+        }
+
+        Commands::Version => {
+            commands::run_version(output_mode)?;
+        }
+
+        Commands::Update => {
+            commands::run_update(output_mode)?;
         }
 
         Commands::Impact { uri, database, depth, format } => {
