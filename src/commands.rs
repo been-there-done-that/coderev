@@ -69,3 +69,79 @@ pub fn run_update(output_mode: OutputMode) -> anyhow::Result<()> {
     }
     Ok(())
 }
+
+pub fn run_upgrade(output_mode: OutputMode) -> anyhow::Result<()> {
+    if output_mode.is_human() {
+        banner(
+            &format!("{}", "Upgrade".bold().style(coderev::ui::theme().info.clone())),
+            "Checking environment and starting upgrade..."
+        );
+        
+        // 1. Check if Homebrew is used
+        let brew_check = std::process::Command::new("brew")
+            .arg("list")
+            .arg("coderev")
+            .output();
+
+        if let Ok(out) = brew_check {
+            if out.status.success() {
+                println!("{} Homebrew installation detected.", Icons::INFO.style(coderev::ui::theme().dim.clone()));
+                println!("{} Running: {}", Icons::ROCKET, "brew upgrade coderev".bold().style(coderev::ui::theme().info.clone()));
+                
+                let mut child = std::process::Command::new("brew")
+                    .arg("upgrade")
+                    .arg("coderev")
+                    .spawn()?;
+                
+                let status = child.wait()?;
+                if status.success() {
+                    success("Successfully upgraded via Homebrew!");
+                } else {
+                    anyhow::bail!("Homebrew upgrade failed.");
+                }
+                return Ok(());
+            }
+        }
+
+        // 2. Fallback to OS-specific script
+        #[cfg(unix)]
+        {
+            println!("{} Direct installation detected.", Icons::INFO.style(coderev::ui::theme().dim.clone()));
+            println!("{} Running: {}", Icons::ROCKET, "curl -sSL ... | sh".bold().style(coderev::ui::theme().info.clone()));
+             
+            let mut child = std::process::Command::new("sh")
+                .arg("-c")
+                .arg("curl -sSL https://raw.githubusercontent.com/been-there-done-that/coderev/main/install.sh | sh")
+                .spawn()?;
+             
+            let status = child.wait()?;
+            if status.success() {
+                success("Successfully upgraded via script!");
+            } else {
+                anyhow::bail!("Upgrade script failed.");
+            }
+        }
+        
+        #[cfg(windows)]
+        {
+            println!("{} Windows installation detected.", Icons::INFO.style(coderev::ui::theme().dim.clone()));
+            println!("{} Running: {}", Icons::ROCKET, "PowerShell -c iwr ... | iex".bold().style(coderev::ui::theme().info.clone()));
+             
+            let mut child = std::process::Command::new("powershell")
+                .arg("-Command")
+                .arg("iwr https://raw.githubusercontent.com/been-there-done-that/coderev/main/install.ps1 | iex")
+                .spawn()?;
+             
+            let status = child.wait()?;
+            if status.success() {
+                success("Successfully upgraded!");
+            } else {
+                anyhow::bail!("Upgrade failed.");
+            }
+        }
+
+    } else {
+        anyhow::bail!("Upgrade command only supported in human mode.");
+    }
+    Ok(())
+}

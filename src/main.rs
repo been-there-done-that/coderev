@@ -598,6 +598,9 @@ enum Commands {
 
     /// Check for updates
     Update,
+
+    /// Upgrade to the latest version
+    Upgrade,
 }
 
 #[derive(Subcommand)]
@@ -664,6 +667,7 @@ fn command_name(command: &Commands) -> &'static str {
         },
         Commands::Version => "version",
         Commands::Update => "update",
+        Commands::Upgrade => "upgrade",
     }
 }
 
@@ -1640,6 +1644,10 @@ async fn run(cli: Cli, output_mode: OutputMode) -> anyhow::Result<()> {
 
         Commands::Update => {
             commands::run_update(output_mode)?;
+        }
+
+        Commands::Upgrade => {
+            commands::run_upgrade(output_mode)?;
         }
 
         Commands::Impact { uri, database, depth, format } => {
